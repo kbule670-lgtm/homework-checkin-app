@@ -136,6 +136,82 @@ select
 from public.assignments a;
 
 -- ============================================================
+-- 4.5 辅助函数：权限判断一律走 SECURITY DEFINER 函数
+--    （函数内查表绕过 RLS；策略里直接查表会在 classes 与
+--    class_members 等表之间互相引用，触发 infinite recursion
+--    42P17，作业页直接加载失败。口径与下面策略一致。）
+-- ============================================================
+create or replace function public.is_class_teacher(p_class_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.classes c
+    where c.id = p_class_id and c.teacher_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_class_member(p_class_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.class_members m
+    where m.class_id = p_class_id and m.student_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_assignment_teacher(p_assignment_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.assignments a
+    where a.id = p_assignment_id and a.teacher_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_assignment_member(p_assignment_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.assignments a
+    join public.class_members m on m.class_id = a.class_id
+    where a.id = p_assignment_id and m.student_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_my_student(p_student_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.class_members m
+    join public.classes c on c.id = m.class_id
+    where m.student_id = p_student_id and c.teacher_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_submission_assignment_teacher(p_submission_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.submissions s
+    join public.assignments a on a.id = s.assignment_id
+    where s.id = p_submission_id and a.teacher_id = auth.uid()
+  );
+$$;
+
+create or replace function public.is_submission_owner(p_submission_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.submissions s
+    where s.id = p_submission_id and s.student_id = auth.uid()
+  );
+$$;
+
+create or replace function public.can_notify(p_assignment_id uuid, p_user_id uuid)
+returns boolean language sql security definer stable as $$
+  select exists (
+    select 1 from public.assignments a
+    join public.class_members m on m.class_id = a.class_id
+    where a.id = p_assignment_id
+      and a.teacher_id = auth.uid()
+      and m.student_id = p_user_id
+  );
+$$;
+
+-- ============================================================
 -- 5. RLS：全部开启；最小可用策略
 --    原则：登录用户只能读自己相关的行；老师可写自己班的作业/批改；
 --    学生只能写自己的提交；profiles 行由本人写。
@@ -155,13 +231,7 @@ create policy "profiles_self" on public.profiles
   for all using (auth.uid() = id) with check (auth.uid() = id);
 drop policy if exists "profiles_teacher_reads_students" on public.profiles;
 create policy "profiles_teacher_reads_students" on public.profiles
-  for select using (
-    exists (
-      select 1 from public.class_members m
-      join public.classes c on c.id = m.class_id
-      where m.student_id = profiles.id and c.teacher_id = auth.uid()
-    )
-  );
+  for select using (public.is_my_student(id));
 
 -- classes：老师可读写自己建的班；班里学生可读该班。
 drop policy if exists "classes_teacher" on public.classes;
@@ -169,29 +239,18 @@ create policy "classes_teacher" on public.classes
   for all using (auth.uid() = teacher_id) with check (auth.uid() = teacher_id);
 drop policy if exists "classes_member_read" on public.classes;
 create policy "classes_member_read" on public.classes
-  for select using (
-    exists (select 1 from public.class_members m
-            where m.class_id = classes.id and m.student_id = auth.uid())
-  );
+  for select using (public.is_class_member(id));
 
 -- class_members：老师可读写自己班的成员；学生可读自己所在的班成员名单（看同学交没交），
 -- 自己进班时可插入自己的一行。
 drop policy if exists "members_teacher" on public.class_members;
 create policy "members_teacher" on public.class_members
-  for all using (
-    exists (select 1 from public.classes c
-            where c.id = class_members.class_id and c.teacher_id = auth.uid())
-  ) with check (
-    exists (select 1 from public.classes c
-            where c.id = class_members.class_id and c.teacher_id = auth.uid())
-  );
+  for all using (public.is_class_teacher(class_id))
+  with check (public.is_class_teacher(class_id));
 drop policy if exists "members_self_read" on public.class_members;
 create policy "members_self_read" on public.class_members
   for select using (
-    student_id = auth.uid()
-    or exists (select 1 from public.class_members me
-               where me.class_id = class_members.class_id
-               and me.student_id = auth.uid())
+    student_id = auth.uid() or public.is_class_member(class_id)
   );
 drop policy if exists "members_self_join" on public.class_members;
 create policy "members_self_join" on public.class_members
@@ -203,28 +262,16 @@ create policy "assignments_teacher" on public.assignments
   for all using (auth.uid() = teacher_id) with check (auth.uid() = teacher_id);
 drop policy if exists "assignments_member_read" on public.assignments;
 create policy "assignments_member_read" on public.assignments
-  for select using (
-    exists (select 1 from public.class_members m
-            where m.class_id = assignments.class_id and m.student_id = auth.uid())
-  );
+  for select using (public.is_class_member(class_id));
 
 -- questions：随作业走——老师可读写自己作业的题；班里学生可读。
 drop policy if exists "questions_teacher" on public.questions;
 create policy "questions_teacher" on public.questions
-  for all using (
-    exists (select 1 from public.assignments a
-            where a.id = questions.assignment_id and a.teacher_id = auth.uid())
-  ) with check (
-    exists (select 1 from public.assignments a
-            where a.id = questions.assignment_id and a.teacher_id = auth.uid())
-  );
+  for all using (public.is_assignment_teacher(assignment_id))
+  with check (public.is_assignment_teacher(assignment_id));
 drop policy if exists "questions_member_read" on public.questions;
 create policy "questions_member_read" on public.questions
-  for select using (
-    exists (select 1 from public.assignments a
-            join public.class_members m on m.class_id = a.class_id
-            where a.id = questions.assignment_id and m.student_id = auth.uid())
-  );
+  for select using (public.is_assignment_member(assignment_id));
 
 -- submissions：学生只能写自己的提交、读自己的提交；
 -- 老师可读自己班作业的全部提交（批改用）。
@@ -233,39 +280,21 @@ create policy "submissions_student" on public.submissions
   for all using (auth.uid() = student_id) with check (auth.uid() = student_id);
 drop policy if exists "submissions_teacher_read" on public.submissions;
 create policy "submissions_teacher_read" on public.submissions
-  for select using (
-    exists (select 1 from public.assignments a
-            where a.id = submissions.assignment_id and a.teacher_id = auth.uid())
-  );
+  for select using (public.is_assignment_teacher(assignment_id));
 -- 老师批改后要把提交状态改成 graded：允许老师 update 自己班作业的提交状态。
 drop policy if exists "submissions_teacher_mark_graded" on public.submissions;
 create policy "submissions_teacher_mark_graded" on public.submissions
-  for update using (
-    exists (select 1 from public.assignments a
-            where a.id = submissions.assignment_id and a.teacher_id = auth.uid())
-  ) with check (
-    exists (select 1 from public.assignments a
-            where a.id = submissions.assignment_id and a.teacher_id = auth.uid())
-  );
+  for update using (public.is_assignment_teacher(assignment_id))
+  with check (public.is_assignment_teacher(assignment_id));
 
 -- grades：老师可写自己班作业的批改；学生可读自己的批改。
 drop policy if exists "grades_teacher" on public.grades;
 create policy "grades_teacher" on public.grades
-  for all using (
-    exists (select 1 from public.submissions s
-            join public.assignments a on a.id = s.assignment_id
-            where s.id = grades.submission_id and a.teacher_id = auth.uid())
-  ) with check (
-    exists (select 1 from public.submissions s
-            join public.assignments a on a.id = s.assignment_id
-            where s.id = grades.submission_id and a.teacher_id = auth.uid())
-  );
+  for all using (public.is_submission_assignment_teacher(submission_id))
+  with check (public.is_submission_assignment_teacher(submission_id));
 drop policy if exists "grades_student_read" on public.grades;
 create policy "grades_student_read" on public.grades
-  for select using (
-    exists (select 1 from public.submissions s
-            where s.id = grades.submission_id and s.student_id = auth.uid())
-  );
+  for select using (public.is_submission_owner(submission_id));
 
 -- notifications：只给本人看、本人标已读；老师发作业时按
 -- notifications_teacher_insert 策略直接给本班学生插通知行（App 端写入即可，
@@ -280,13 +309,7 @@ create policy "notifications_self" on public.notifications
 drop policy if exists "notifications_teacher_insert" on public.notifications;
 create policy "notifications_teacher_insert" on public.notifications
   for insert with check (
-    exists (
-      select 1 from public.assignments a
-      join public.class_members m on m.class_id = a.class_id
-      where a.id = notifications.assignment_id
-        and a.teacher_id = auth.uid()
-        and m.student_id = notifications.user_id
-    )
+    public.can_notify(assignment_id, user_id)
   );
 
 -- ============================================================
