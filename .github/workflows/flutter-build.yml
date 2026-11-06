@@ -109,11 +109,11 @@ jobs:
         run: flutter analyze --no-fatal-infos
 
       - name: 构建 Android（未签名 release apk）
-        run: flutter build apk --release
+        run: flutter build apk --release --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
       - name: 构建 iOS（未签名）
         # flutter build ios 只产出 Runner.app；下一步把它打包成未签名 .ipa
-        run: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
       - name: 打包产物为 HomeworkCheckin-V1.apk / HomeworkCheckin-V1.ipa（未签名）
         run: |
