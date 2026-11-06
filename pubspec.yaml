@@ -1,0 +1,32 @@
+name: homework_checkin
+description: "师生作业打卡 App（简易版）：老师布置作业，学生登录提交，老师批改统计。Flutter 一份代码出 iOS + Android，后端用 Supabase 免费版。"
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.4.0
+  flutter: ^3.22.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.8.0
+  image_picker: ^1.1.2
+  file_picker: ^8.0.0
+  excel: ^4.0.2
+  # 注意：excel 4.x 上游依赖 archive 3.x，所以这里必须用 archive 3.x，
+  # 不能用 4.x，否则 flutter pub get 会解析失败。
+  archive: ^3.6.1
+  csv: ^6.0.0
+  http: ^1.2.0
+  intl: ^0.19.0
+  flutter_local_notifications: ^18.0.1
+  path: ^1.9.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
