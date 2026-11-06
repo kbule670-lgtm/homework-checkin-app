@@ -28,6 +28,12 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v4
 
+      - name: 安装 Java 17（Flutter 3.22 推荐，Gradle 8.5 兼容）
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
       - name: 安装 Flutter 3.22
         uses: subosito/flutter-action@v2
         with:
