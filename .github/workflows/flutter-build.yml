@@ -104,8 +104,7 @@ jobs:
         run: flutter pub get
 
       - name: flutter analyze
-        # 仅 info 级提示（未用辅助函数、prefer_const、supabase anonKey 废弃提示）
-        # 不应阻断编译；error / warning 仍会让这一步失败。
+# 仅 info 级提示不应阻断编译；error / warning 仍会让这一步失败（未用辅助函数报的是 warning，不是 info）
         run: flutter analyze --no-fatal-infos
 
       - name: 构建 Android（未签名 release apk）

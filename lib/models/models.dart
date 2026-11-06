@@ -45,25 +45,8 @@ SubmissionStatus _statusFromString(String value) {
 String _roleToString(UserRole role) =>
     role == UserRole.teacher ? 'teacher' : 'student';
 
-String _modeToString(AssignmentMode mode) =>
-    mode == AssignmentMode.quiz ? 'quiz' : 'photo';
-
-String _gradingToString(GradingMode mode) =>
-    mode == GradingMode.grade ? 'grade' : 'score100';
-
 String _questionTypeToString(QuestionType type) =>
     type == QuestionType.fill ? 'fill' : 'choice';
-
-String _statusToString(SubmissionStatus status) {
-  switch (status) {
-    case SubmissionStatus.late:
-      return 'late';
-    case SubmissionStatus.graded:
-      return 'graded';
-    case SubmissionStatus.submitted:
-      return 'submitted';
-  }
-}
 
 DateTime _parseDate(dynamic value, {DateTime? fallback}) {
   if (value == null) return fallback ?? DateTime.now();
