@@ -6,6 +6,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:native_liquid_glass/native_liquid_glass.dart';
 
 import 'app_config.dart';
 import 'models/models.dart';
@@ -31,6 +32,7 @@ class MyApp extends StatelessWidget {
       title: appName,
       theme: AppTheme.lightTheme,
       debugShowCheckedModeBanner: false,
+      navigatorObservers: <NavigatorObserver>[LiquidGlassNavigatorObserver()],
       home: const AuthGate(),
       routes: <String, WidgetBuilder>{
         '/home': (context) => const HomeScreen(),

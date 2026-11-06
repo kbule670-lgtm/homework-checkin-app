@@ -5,6 +5,7 @@
 library;
 
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../app_config.dart' as config;
 import '../../models/models.dart';
@@ -12,6 +13,19 @@ import '../../services/supabase_service.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'home_screen.dart';
+
+/// 把 Supabase Auth 的英文报错翻译成人话：密码不对就直说密码不对，
+/// 别让用户以为是网络问题；真正连不上网时才报网络问题。
+String _authErrorText(AuthException e) {
+  final message = e.message;
+  if (message.contains('Invalid login credentials')) {
+    return '手机号或密码不对，请检查后重试';
+  }
+  if (message.contains('User already registered')) {
+    return '这个手机号已经注册过，请直接登录';
+  }
+  return '登录失败，请稍后重试';
+}
 
 class AuthScreen extends StatefulWidget {
   const AuthScreen({super.key});
@@ -93,6 +107,8 @@ class _AuthScreenState extends State<AuthScreen> {
       );
     } on StateError catch (e) {
       if (mounted) showAppSnackBar(context, e.message, isError: true);
+    } on AuthException catch (e) {
+      if (mounted) showAppSnackBar(context, _authErrorText(e), isError: true);
     } catch (_) {
       if (mounted) {
         showAppSnackBar(context, '网络有点问题，请稍后重试', isError: true);
