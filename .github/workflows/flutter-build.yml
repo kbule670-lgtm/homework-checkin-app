@@ -1,0 +1,131 @@
+# 师生作业打卡 App（简易版）— GitHub Actions 编译工作流
+#
+# 用途：云端 Mac 上编译出未签名 HomeworkCheckin-V1.apk + HomeworkCheckin-V1.ipa（全能签安装）。
+# 命名规矩（2026-11-06 用户亲口定）：安装包用 App名+第n版；2026-11-06 20:38 用户同意换英文名，
+# 避免中文文件名导致 Muse 文件预览卡住，App 内显示名仍是作业打卡，不受文件名影响。
+# 铁律：本地先写完备齐、静态自查，再整批一次上传；本工作流只在
+# 上传后跑一次，不要用它逐个文件试错。没绿勾之前不算交付。
+#
+# 注意：本工程本地的 android/ios 原生壳不完整（只有
+# android/app/build.gradle、AndroidManifest.xml、ios/Runner/Info.plist）。
+# 所以工作流第一步先在 /tmp 补壳（flutter create），再把我们的
+# lib/、pubspec.yaml 和三处已定制的原生配置覆盖回去，顺序见下。
+# 顺序绝对不能反：先补壳 → 再覆盖我们的代码 → 再 pub get / analyze / build。
+# Supabase URL/Key 一律留空占位，不进仓库、不进工作流 secret 之外。
+
+name: flutter-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: build-apk-and-ipa
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter 3.22
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.22.0"
+          channel: stable
+          cache: true
+
+      - name: 补原生壳（本地壳缺失时才跑）
+        run: |
+          set -e
+          # 缺壳的标志：缺 settings.gradle、缺 Runner.xcodeproj、缺 gradle-wrapper.jar、
+          # 缺 iOS 图标。文字文件推送不含二进制文件时，这里靠 flutter create 补回。
+          if [ -f android/settings.gradle ] && [ -d ios/Runner.xcodeproj ] && [ -f android/gradle/wrapper/gradle-wrapper.jar ] && [ -f ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png ]; then
+            echo "原生壳已齐全，跳过 flutter create"
+            exit 0
+          fi
+          echo "原生壳缺失，先在 /tmp 生成一份干净壳"
+          rm -rf /tmp/shell-app
+          flutter create --project-name homework_checkin --org com.homework --platforms android,ios /tmp/shell-app
+          # 只补缺的壳文件，绝不覆盖我们的代码：
+          # 保护清单（存在就保留，不覆盖）：lib/、pubspec.yaml、
+          # android/app/build.gradle、android/app/src/main/AndroidManifest.xml、
+          # ios/Runner/Info.plist、analysis_options.yaml
+          # 补：android/settings.gradle、android/gradle.properties、
+          # android/gradle/wrapper/*、android/app/src/main/kotlin/.../MainActivity.*、
+          # android/build.gradle、ios/Runner/AppDelegate.*、ios/Runner.xcodeproj/*、
+          # ios/Runner/Assets.xcassets、ios/Podfile 等其余壳文件。
+          cp -n /tmp/shell-app/android/settings.gradle android/settings.gradle 2>/dev/null || true
+          cp -n /tmp/shell-app/android/gradle.properties android/gradle.properties 2>/dev/null || true
+          cp -n /tmp/shell-app/android/build.gradle android/build.gradle 2>/dev/null || true
+          mkdir -p android/gradle/wrapper
+          cp -n /tmp/shell-app/android/gradle/wrapper/gradle-wrapper.jar android/gradle/wrapper/ 2>/dev/null || true
+          cp -n /tmp/shell-app/android/gradle/wrapper/gradle-wrapper.properties android/gradle/wrapper/ 2>/dev/null || true
+          cp -n /tmp/shell-app/android/gradlew android/gradlew 2>/dev/null || true
+          cp -n /tmp/shell-app/android/gradlew.bat android/gradlew.bat 2>/dev/null || true
+          # 安卓图标：文字推送不含 png 时补回（只补缺失，不覆盖已有）
+          cp -rn /tmp/shell-app/android/app/src/main/res/mipmap-hdpi android/app/src/main/res/ 2>/dev/null || true
+          cp -rn /tmp/shell-app/android/app/src/main/res/mipmap-mdpi android/app/src/main/res/ 2>/dev/null || true
+          cp -rn /tmp/shell-app/android/app/src/main/res/mipmap-xhdpi android/app/src/main/res/ 2>/dev/null || true
+          cp -rn /tmp/shell-app/android/app/src/main/res/mipmap-xxhdpi android/app/src/main/res/ 2>/dev/null || true
+          cp -rn /tmp/shell-app/android/app/src/main/res/mipmap-xxxhdpi android/app/src/main/res/ 2>/dev/null || true
+          # MainActivity：只在我们没有时才补，绝不覆盖已有文件
+          find /tmp/shell-app/android/app/src -name "MainActivity.*" -exec sh -c 'd="android/app/src/main/kotlin/com/homework/checkin"; mkdir -p "$d"; cp -n "$1" "$d/" 2>/dev/null || true' _ {} \;
+          # iOS 壳：只补缺失文件
+          cp -rn /tmp/shell-app/ios/Runner.xcodeproj ios/ 2>/dev/null || true
+          cp -n /tmp/shell-app/ios/Runner/AppDelegate.swift ios/Runner/AppDelegate.swift 2>/dev/null || true
+          cp -n /tmp/shell-app/ios/Runner/AppDelegate.m ios/Runner/AppDelegate.m 2>/dev/null || true
+          cp -rn /tmp/shell-app/ios/Runner/Assets.xcassets ios/Runner/ 2>/dev/null || true
+          cp -n /tmp/shell-app/ios/Flutter/AppFrameworkInfo.plist ios/Flutter/AppFrameworkInfo.plist 2>/dev/null || true
+          cp -n /tmp/shell-app/ios/Podfile ios/Podfile 2>/dev/null || true
+          cp -n /tmp/shell-app/ios/Runner/Runner-Bridging-Header.h ios/Runner/Runner-Bridging-Header.h 2>/dev/null || true
+          echo "--- 补壳后核对 ---"
+          ls android/settings.gradle ios/Runner.xcodeproj 2>&1
+          test -f android/settings.gradle
+          test -d ios/Runner.xcodeproj
+          echo "壳已补齐，且 lib/、pubspec.yaml 未被覆盖"
+
+      - name: 核对保护清单未被覆盖
+        run: |
+          set -e
+          test -f lib/main.dart
+          test -f pubspec.yaml
+          grep -q "homework_checkin" pubspec.yaml
+          grep -q "作业打卡" lib/app_config.dart
+          echo "lib/ 与 pubspec.yaml 完好"
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        # 仅 info 级提示（未用辅助函数、prefer_const、supabase anonKey 废弃提示）
+        # 不应阻断编译；error / warning 仍会让这一步失败。
+        run: flutter analyze --no-fatal-infos
+
+      - name: 构建 Android（未签名 release apk）
+        run: flutter build apk --release
+
+      - name: 构建 iOS（未签名）
+        # flutter build ios 只产出 Runner.app；下一步把它打包成未签名 .ipa
+        run: flutter build ios --release --no-codesign
+
+      - name: 打包产物为 HomeworkCheckin-V1.apk / HomeworkCheckin-V1.ipa（未签名）
+        run: |
+          set -e
+          mkdir -p dist
+          cp build/app/outputs/flutter-apk/app-release.apk dist/HomeworkCheckin-V1.apk
+          # 把 Runner.app 包成 Payload/xxx.app 再 zip 成 .ipa（全能签可装）
+          rm -rf dist/Payload
+          mkdir -p dist/Payload
+          cp -r build/ios/iphoneos/Runner.app dist/Payload/
+          (cd dist && zip -r -q HomeworkCheckin-V1.ipa Payload && rm -rf Payload)
+          ls -lh dist/
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: homework-checkin-1
+          path: |
+            dist/HomeworkCheckin-V1.apk
+            dist/HomeworkCheckin-V1.ipa
+          retention-days: 30
