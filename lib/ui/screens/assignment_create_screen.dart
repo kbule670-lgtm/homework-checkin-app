@@ -91,6 +91,37 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
     );
   }
 
+  /// 待确认题目的切题评分明细：总分 + 每项加减分理由，方便排查误切/漏切。
+  Future<void> _showParseReasons(Question question) async {
+    final reasons = question.parseReasons ?? const <String>[];
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('切题评分明细'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('总分 ${question.parseScore ?? 0} 分（≥7 高置信，4–6 待确认）'),
+              const SizedBox(height: 8),
+              if (reasons.isEmpty)
+                const Text('没有评分明细。')
+              else
+                for (final reason in reasons) Text('· $reason'),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _pickDeadline() async {
     final now = DateTime.now();
     final date = await showDatePicker(
@@ -154,7 +185,11 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
           ...parsed,
         ];
       });
-      _showMessage('已导入 ${parsed.length} 道题');
+      _showMessage(
+        parsed.where((q) => q.parsePending).isEmpty
+            ? '已导入 ${parsed.length} 道题'
+            : '已导入 ${parsed.length} 道题，其中 ${parsed.where((q) => q.parsePending).length} 道切题待确认，请检查后再发布',
+      );
     } catch (e) {
       _showMessage('导入失败：$e');
     } finally {
@@ -530,6 +565,14 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                 '导入支持 Excel、Word、PDF 文字版、txt、CSV、JSON；老版 .doc 请另存为 .docx，扫描版 PDF 请转文字版。',
                 style: TextStyle(fontSize: 12, color: Colors.grey),
               ),
+              if (_questions.any((q) => q.parsePending))
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    '其中 ${_questions.where((q) => q.parsePending).length} 道切题待确认（评分 4–6 分），请检查题干对不对，不对的删掉；点一道待确认的题能看评分明细。',
+                    style: const TextStyle(fontSize: 12, color: Colors.orange),
+                  ),
+                ),
               const SizedBox(height: 8),
               if (_questions.isEmpty)
                 const Card(
@@ -543,12 +586,41 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                   Card(
                     margin: const EdgeInsets.only(bottom: 8),
                     child: ListTile(
-                      title: Text('第 ${i + 1} 题（${_questions[i].points} 分）'),
+                      title: Row(
+                        children: [
+                          Text(
+                            '第 ${i + 1} 题（${_questions[i].points} 分）',
+                          ),
+                          if (_questions[i].parsePending) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.amber.shade100,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                '待确认',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                       subtitle: Text(
                         _questions[i].stem,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
+                      onTap: _questions[i].parsePending
+                          ? () => _showParseReasons(_questions[i])
+                          : null,
                       trailing: IconButton(
                         icon: const Icon(Icons.delete_outline),
                         tooltip: '删除这道题',
