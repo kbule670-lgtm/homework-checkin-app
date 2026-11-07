@@ -168,17 +168,9 @@ class _AssignmentsScreenState extends State<AssignmentsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // 不要在这里再放 AppBar：HomeScreen 已经有一个显示当前 tab 名的 AppBar，
+    // 这里再放一个会上下出现两个“作业”。刷新用下拉刷新（RefreshIndicator）。
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('作业'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: '刷新',
-            onPressed: _load,
-          ),
-        ],
-      ),
       floatingActionButton: _isTeacher
           ? FloatingActionButton(
               onPressed: () async {

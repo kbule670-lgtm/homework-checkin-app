@@ -74,36 +74,34 @@ class _HomeScreenState extends State<HomeScreen> {
       extendBody: true,
       bottomNavigationBar: NativeLiquidGlassUtils.supportsLiquidGlass
           ? LiquidGlassTabBar(
+              // 图标必须用 SF Symbol（系统原生渲染，大小正常）。
+              // 不要用 iconData：不传 iconSize 时原生侧会按 192pt 原图显示，图标会巨大无比。
               items: <LiquidGlassTabItem>[
                 const LiquidGlassTabItem(
                   label: '作业',
-                  icon: NativeLiquidGlassIcon.iconData(
-                    Icons.assignment_outlined,
-                  ),
-                  selectedIcon: NativeLiquidGlassIcon.iconData(
-                    Icons.assignment,
-                  ),
+                  icon: NativeLiquidGlassIcon.sfSymbol('doc.text'),
+                  selectedIcon:
+                      NativeLiquidGlassIcon.sfSymbol('doc.text.fill'),
                 ),
                 const LiquidGlassTabItem(
                   label: '班级',
-                  icon: NativeLiquidGlassIcon.iconData(Icons.group_outlined),
-                  selectedIcon: NativeLiquidGlassIcon.iconData(Icons.group),
+                  icon: NativeLiquidGlassIcon.sfSymbol('person.2'),
+                  selectedIcon:
+                      NativeLiquidGlassIcon.sfSymbol('person.2.fill'),
                 ),
                 LiquidGlassTabItem(
                   label: _isTeacher ? '批改' : '我的提交',
-                  icon: NativeLiquidGlassIcon.iconData(
-                    _isTeacher
-                        ? Icons.fact_check_outlined
-                        : Icons.outbox_outlined,
+                  icon: NativeLiquidGlassIcon.sfSymbol(
+                    _isTeacher ? 'checkmark.circle' : 'tray',
                   ),
-                  selectedIcon: NativeLiquidGlassIcon.iconData(
-                    _isTeacher ? Icons.fact_check : Icons.outbox,
+                  selectedIcon: NativeLiquidGlassIcon.sfSymbol(
+                    _isTeacher ? 'checkmark.circle.fill' : 'tray.fill',
                   ),
                 ),
                 const LiquidGlassTabItem(
                   label: '我的',
-                  icon: NativeLiquidGlassIcon.iconData(Icons.person_outline),
-                  selectedIcon: NativeLiquidGlassIcon.iconData(Icons.person),
+                  icon: NativeLiquidGlassIcon.sfSymbol('person'),
+                  selectedIcon: NativeLiquidGlassIcon.sfSymbol('person.fill'),
                 ),
               ],
               currentIndex: _currentIndex,

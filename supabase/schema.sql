@@ -240,6 +240,11 @@ create policy "classes_teacher" on public.classes
 drop policy if exists "classes_member_read" on public.classes;
 create policy "classes_member_read" on public.classes
   for select using (public.is_class_member(id));
+-- 学生凭邀请码进班：进班前还不是成员，上面两条都查不到班级，邀请码会报不存在。
+-- 允许已登录用户读班级基础信息来按邀请码查班；作业与提交仍只对班里成员可见。
+drop policy if exists "classes_invite_lookup" on public.classes;
+create policy "classes_invite_lookup" on public.classes
+  for select using (auth.uid() is not null);
 
 -- class_members：老师可读写自己班的成员；学生可读自己所在的班成员名单（看同学交没交），
 -- 自己进班时可插入自己的一行。

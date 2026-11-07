@@ -15,7 +15,8 @@ import '../widgets/common.dart';
 import 'home_screen.dart';
 
 /// 把 Supabase Auth 的英文报错翻译成人话：密码不对就直说密码不对，
-/// 别让用户以为是网络问题；真正连不上网时才报网络问题。
+/// 连不上服务器（安卓手机常见，移动数据到 Supabase 的路不通时）就直说
+/// 是网络问题，别让用户以为是密码错了；其他情况才报登录失败。
 String _authErrorText(AuthException e) {
   final message = e.message;
   if (message.contains('Invalid login credentials')) {
@@ -23,6 +24,17 @@ String _authErrorText(AuthException e) {
   }
   if (message.contains('User already registered')) {
     return '这个手机号已经注册过，请直接登录';
+  }
+  if (message.contains('Failed to fetch') ||
+      message.contains('Failed host lookup') ||
+      message.contains('SocketException') ||
+      message.contains('ClientException') ||
+      message.contains('Network is unreachable') ||
+      message.contains('Connection refused') ||
+      message.contains('AuthRetryableFetchException') ||
+      message.contains('Too many requests') ||
+      message.contains('timed out')) {
+    return '连不上服务器，请检查网络后重试（安卓手机可以试试连 WiFi 再登）';
   }
   return '登录失败，请稍后重试';
 }
