@@ -134,6 +134,116 @@ class _ClassesScreenState extends State<ClassesScreen> {
     }
   }
 
+  /// 左滑解散班级：滑出红色“解散”，松手先弹确认框，点确认才真的解散。
+  Future<bool> _confirmDissolve(SchoolClass schoolClass) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('解散班级'),
+          content: Text(
+            '解散“${schoolClass.name}”后，该班的作业、学生提交和批改记录都会删除，不可恢复。确定要解散吗？',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              style: FilledButton.styleFrom(backgroundColor: Colors.red),
+              child: const Text('确认解散'),
+            ),
+          ],
+        );
+      },
+    );
+    return confirmed == true;
+  }
+
+  Future<void> _dissolveClass(SchoolClass schoolClass) async {
+    try {
+      await _service.deleteClass(schoolClass.id);
+      if (!mounted) return;
+      showAppSnackBar(context, '班级已解散');
+      _load();
+    } on StateError catch (e) {
+      if (mounted) showAppSnackBar(context, e.message, isError: true);
+    } catch (_) {
+      if (mounted) showAppSnackBar(context, '解散失败，请稍后重试', isError: true);
+    }
+  }
+
+  Widget _classCard(SchoolClass schoolClass) {
+    return WeChatCard(
+      onTap: () async {
+        final changed = await Navigator.of(context).push<bool>(
+          MaterialPageRoute<bool>(
+            builder: (_) => ClassDetailScreen(
+              schoolClass: schoolClass,
+              profile: widget.profile,
+            ),
+          ),
+        );
+        if (changed == true) _load();
+      },
+      child: Row(
+        children: <Widget>[
+          NameAvatar(name: schoolClass.name),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  schoolClass.name,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  [
+                    if (schoolClass.subject != null &&
+                        schoolClass.subject!.isNotEmpty)
+                      schoolClass.subject!,
+                    '邀请码 ${schoolClass.inviteCode}',
+                    '${_memberCounts[schoolClass.id] ?? 0} 人',
+                  ].join(' · '),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: '复制邀请码',
+            icon: const Icon(
+              Icons.copy,
+              size: 20,
+              color: AppTheme.textSecondary,
+            ),
+            onPressed: () async {
+              await Clipboard.setData(
+                ClipboardData(text: schoolClass.inviteCode),
+              );
+              if (context.mounted) {
+                showAppSnackBar(context, '邀请码已复制');
+              }
+            },
+          ),
+          const Icon(
+            Icons.chevron_right,
+            color: AppTheme.textSecondary,
+          ),
+        ],
+      ),
+    );
+  }
+
   void _showCreateDialog() {
     showDialog<void>(
       context: context,
@@ -260,73 +370,38 @@ class _ClassesScreenState extends State<ClassesScreen> {
             for (final schoolClass in _classes)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: WeChatCard(
-                  onTap: () async {
-                    final changed = await Navigator.of(context).push<bool>(
-                      MaterialPageRoute<bool>(
-                        builder: (_) => ClassDetailScreen(
-                          schoolClass: schoolClass,
-                          profile: widget.profile,
-                        ),
-                      ),
-                    );
-                    if (changed == true) _load();
-                  },
-                  child: Row(
-                    children: <Widget>[
-                      NameAvatar(name: schoolClass.name),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(
-                              schoolClass.name,
-                              style: const TextStyle(
-                                fontSize: 16,
-                                fontWeight: FontWeight.w600,
+                child: _isTeacher
+                    ? Dismissible(
+                        key: ValueKey('class_${schoolClass.id}'),
+                        direction: DismissDirection.endToStart,
+                        background: Container(
+                          color: Colors.red,
+                          alignment: Alignment.centerRight,
+                          padding: const EdgeInsets.only(right: 20),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '解散',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 16,
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              [
-                                if (schoolClass.subject != null &&
-                                    schoolClass.subject!.isNotEmpty)
-                                  schoolClass.subject!,
-                                '邀请码 ${schoolClass.inviteCode}',
-                                '${_memberCounts[schoolClass.id] ?? 0} 人',
-                              ].join(' · '),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: AppTheme.textSecondary,
+                              SizedBox(width: 6),
+                              Icon(
+                                Icons.delete_outline,
+                                color: Colors.white,
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ),
-                      IconButton(
-                        tooltip: '复制邀请码',
-                        icon: const Icon(
-                          Icons.copy,
-                          size: 20,
-                          color: AppTheme.textSecondary,
-                        ),
-                        onPressed: () async {
-                          await Clipboard.setData(
-                            ClipboardData(text: schoolClass.inviteCode),
-                          );
-                          if (context.mounted) {
-                            showAppSnackBar(context, '邀请码已复制');
-                          }
-                        },
-                      ),
-                      const Icon(
-                        Icons.chevron_right,
-                        color: AppTheme.textSecondary,
-                      ),
-                    ],
-                  ),
-                ),
+                        confirmDismiss: (_) =>
+                            _confirmDissolve(schoolClass),
+                        onDismissed: (_) => _dissolveClass(schoolClass),
+                        child: _classCard(schoolClass),
+                      )
+                    : _classCard(schoolClass),
               ),
         ],
       ),

@@ -213,35 +213,41 @@ class _AssignmentsScreenState extends State<AssignmentsScreen> {
               ),
             )
           : null,
-      body: Column(
-        children: [
-          if (_classes.length > 1)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-              child: DropdownButtonFormField<String?>(
-                value: _selectedClassId,
-                decoration: const InputDecoration(
-                  labelText: '班级筛选',
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  const DropdownMenuItem<String?>(
-                    value: null,
-                    child: Text('全部班级'),
+      // 从班级详情页整页推进来时本页没有 AppBar（为避免在主页 tab 里
+      // 出现两个“作业”标题，AppBar 只在 HomeScreen 上），内容会顶到
+      // 状态栏下面、时间叠在“班级筛选”上；SafeArea 只在没有 AppBar
+      // 时补这段高度，tab 里不重复留白。
+      body: SafeArea(
+        child: Column(
+          children: [
+            if (_classes.length > 1)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                child: DropdownButtonFormField<String?>(
+                  value: _selectedClassId,
+                  decoration: const InputDecoration(
+                    labelText: '班级筛选',
+                    border: OutlineInputBorder(),
                   ),
-                  for (final c in _classes)
-                    DropdownMenuItem<String?>(
-                      value: c.id,
-                      child: Text(c.name),
+                  items: [
+                    const DropdownMenuItem<String?>(
+                      value: null,
+                      child: Text('全部班级'),
                     ),
-                ],
-                onChanged: (value) {
-                  setState(() => _selectedClassId = value);
-                },
+                    for (final c in _classes)
+                      DropdownMenuItem<String?>(
+                        value: c.id,
+                        child: Text(c.name),
+                      ),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _selectedClassId = value);
+                  },
+                ),
               ),
-            ),
-          Expanded(child: _buildBody()),
-        ],
+            Expanded(child: _buildBody()),
+          ],
+        ),
       ),
     );
   }
