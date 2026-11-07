@@ -94,21 +94,287 @@ final _optionMark = RegExp(r'([A-E])[.、．:：]');
 /// - 缺答案的题不丢弃，answer 为空字符串，调用方应在发作业前提醒老师补全。
 /// - 一块里粘了两道题（多个答案行）时，启发式劈开：从第一个答案行之后
 ///   第一个非空行处劈成两道；劈不开就原样保留一道（纯规则，不用 AI）。
+/// - 切题用记分制（候选 → 评分 → 阈值）：≥7 高置信切题，4–6 待确认
+///   （照样切，标出来让老师检查），<4 不切；每切点的得分与明细挂在
+///   Question.parseScore/parseReasons 上。
+/// 切题器记分制（用户的记分制方案；刷题 App 切题器同款思路：候选 → 评分 → 阈值）。
+///
+/// 评分表：
+/// - 题型标记（单选/多选/判断/填空/简答）+3
+/// - 后续有标准选项结构（A、B 按序出现，或正确/错误成对）+3
+/// - 题号连续（或从 1 重排、或首题不计连续）+2；题号递增 +1
+/// - 前面 48 字内有上一题答案/解析结束标志 +3
+/// - 题号后有完整题干（≥4 字）+2
+/// - 格式不规范/OCR 歧义的弱标记（[n 缺右括号）-2
+/// - 疑似年份/句中数字（行中出现且无题型标记，或 1900–2099 且无题型标记）-3
+/// - 孤立题号（标记后没有题干）-3
+/// - 行首点号题号弱佐证（没题型、没连续性、前面也没答案行时）-2
+/// 判定：≥7 高置信切题；4–6 待确认（照样切，标出来让老师检查）；
+/// <4 不切。跳号/重复号不以连续性为必要条件；跨页不自动切
+/// （没有标记就不会切）；没选项的题也能切（不强制要求 A–D）。
+/// 每个切点的得分与明细挂在 Question.parseScore/parseReasons 上。
+class _Candidate {
+  final int start;
+  final int markerEnd;
+  final int number;
+  final String? hint;
+  final bool atLineStart;
+  final bool weakForm;
+  final bool isDotted;
+  int score = 0;
+  final List<String> reasons = <String>[];
+  bool pending = false;
+
+  _Candidate({
+    required this.start,
+    required this.markerEnd,
+    required this.number,
+    required this.hint,
+    required this.atLineStart,
+    required this.weakForm,
+    required this.isDotted,
+  });
+}
+
+/// 候选标记正则（归一化后括号都是半角）。分组与下面 _findCandidates 一一对应：
+/// 1,2=[n](型) 3,4=[n(型) 5=[n 6,7=(n)(型) 8=第n题 9,10=n(型) 11=行首n.
+final _candidatePattern = RegExp(
+  r'\[(\d{1,4})\][ \t]*(?:[\[(]?(单选|多选|判断|填空|简答)[\]\)])?'
+  r'|\[(\d{1,4})[ \t]*[\[(](单选|多选|判断|填空|简答)[\]\)]?'
+  r'|\[(\d{1,4})(?=[ \t])'
+  r'|\((\d{1,4})\)[ \t]*(?:[\[(]?(单选|多选|判断|填空|简答)[\]\)])?'
+  r'|第[ \t]*(\d{1,4})[ \t]*题'
+  r'|(\d{1,4})[ \t]*[\[(](单选|多选|判断|填空|简答)[\]\)]'
+  r'|^[ \t]*(\d{1,4})[ \t]*[.、．)]',
+  multiLine: true,
+);
+
+/// 在归一化文本里找全部候选并按记分制打分（不含连续性分，连续性由
+/// _selectBoundaries 按顺序补）。
+List<_Candidate> _findCandidates(String normalized) {
+  final matches = _candidatePattern.allMatches(normalized).toList();
+  final candidates = <_Candidate>[];
+  for (var i = 0; i < matches.length; i++) {
+    final m = matches[i];
+    String? numStr;
+    String? hint;
+    var weakForm = false;
+    var isDotted = false;
+    if (m.group(1) != null) {
+      numStr = m.group(1);
+      hint = m.group(2);
+    } else if (m.group(3) != null) {
+      numStr = m.group(3);
+      hint = m.group(4);
+      weakForm = true;
+    } else if (m.group(5) != null) {
+      numStr = m.group(5);
+      weakForm = true;
+    } else if (m.group(6) != null) {
+      numStr = m.group(6);
+      hint = m.group(7);
+    } else if (m.group(8) != null) {
+      numStr = m.group(8);
+    } else if (m.group(9) != null) {
+      numStr = m.group(9);
+      hint = m.group(10);
+    } else if (m.group(11) != null) {
+      numStr = m.group(11);
+      isDotted = true;
+    } else {
+      continue;
+    }
+    final number = int.tryParse(numStr ?? '');
+    if (number == null || number < 1) continue;
+    // 是否行首：往前跳过空格/制表符，到文本头或换行即是。
+    var atLineStart = false;
+    var p = m.start - 1;
+    while (p >= 0) {
+      final ch = normalized[p];
+      if (ch == ' ' || ch == '\t') {
+        p -= 1;
+        continue;
+      }
+      atLineStart = ch == '\n' || ch == '\r';
+      break;
+    }
+    if (p < 0) atLineStart = true;
+    final c = _Candidate(
+      start: m.start,
+      markerEnd: m.end,
+      number: number,
+      hint: hint,
+      atLineStart: atLineStart,
+      weakForm: weakForm,
+      isDotted: isDotted,
+    );
+    // 题型标记 +3。
+    if (hint != null) {
+      c.score += 3;
+      c.reasons.add('题型标记 +3');
+    }
+    // 候选之后的窗口（到下一候选或 600 字内）：选项结构与题干。
+    final winStart = m.end;
+    final nextStart =
+        i + 1 < matches.length ? matches[i + 1].start : normalized.length;
+    final winEnd = winStart + 600 < nextStart
+        ? winStart + 600
+        : nextStart;
+    final window = winEnd > winStart
+        ? normalized.substring(winStart, winEnd)
+        : '';
+    if (_hasOptionStructure(window)) {
+      c.score += 3;
+      c.reasons.add('选项结构 +3');
+    }
+    final stemText = _stemBeforeOptions(window);
+    if (stemText.length >= 4) {
+      c.score += 2;
+      c.reasons.add('题干完整 +2');
+    }
+    // 前面 48 字内有上一题答案/解析结束标志 +3。
+    final backStart = m.start - 48 < 0 ? 0 : m.start - 48;
+    if (backStart < m.start) {
+      final back = normalized.substring(backStart, m.start);
+      if (RegExp(r'(?:答案|正确答案|解析)[ \t]*[:：]').hasMatch(back)) {
+        c.score += 3;
+        c.reasons.add('上一题答案/解析 +3');
+      }
+    }
+    // 格式不规范/OCR 歧义的弱标记 -2。
+    if (weakForm) {
+      c.score -= 2;
+      c.reasons.add('格式不规范 -2');
+    }
+    // 疑似年份/句中数字 -3：行中出现且无题型标记，或 1900–2099 且无题型标记。
+    if (hint == null &&
+        (!atLineStart || (number >= 1900 && number <= 2099))) {
+      c.score -= 3;
+      c.reasons.add('疑似年份/句中数字 -3');
+    }
+    // 孤立题号（标记后没有题干）-3。
+    if (stemText.isEmpty) {
+      c.score -= 3;
+      c.reasons.add('孤立题号 -3');
+    }
+    candidates.add(c);
+  }
+  return candidates;
+}
+
+/// 窗口里有没有选项结构：A、B 两个标记按序出现，或「正确/错误」成对出现。
+bool _hasOptionStructure(String window) {
+  if (window.contains('正确') && window.contains('错误')) return true;
+  final matches = _optionMark.allMatches(window).toList();
+  var seenA = false;
+  for (final m in matches) {
+    final letter = m.group(1);
+    if (letter == 'A') {
+      seenA = true;
+    } else if (letter == 'B' && seenA) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// 窗口里第一个选项标记/答案行之前的文字（即题干），换行折成空格。
+String _stemBeforeOptions(String window) {
+  final optionAt = _optionMark.firstMatch(window)?.start;
+  final answerAt =
+      RegExp(r'(?:答案|正确答案)[ \t]*[:：]').firstMatch(window)?.start;
+  var end = window.length;
+  if (optionAt != null && optionAt < end) end = optionAt;
+  if (answerAt != null && answerAt < end) end = answerAt;
+  return window.substring(0, end).replaceAll(RegExp(r'\s+'), ' ').trim();
+}
+
+/// 连续性补分 + 阈值过滤：≥7 高置信切题；4–6 待确认（照样切，标出来）；
+/// <4 不切。跳号/重复号不以连续性为必要条件。
+List<_Candidate> _selectBoundaries(List<_Candidate> candidates) {
+  final accepted = <_Candidate>[];
+  int? lastNumber;
+  for (final c in candidates) {
+    var continuity = 0;
+    if (lastNumber == null) {
+      // 首题没有前文可佐证，不看连续性，直接给分。
+      continuity = 2;
+      c.reasons.add('首题不计连续 +2');
+    } else if (c.number == lastNumber + 1) {
+      continuity = 2;
+      c.reasons.add('题号连续 +2');
+    } else if (c.number == 1) {
+      // 分节后题号从 1 重排。
+      continuity = 2;
+      c.reasons.add('题号从 1 重排 +2');
+    } else if (c.number > lastNumber) {
+      continuity = 1;
+      c.reasons.add('题号递增 +1');
+    }
+    c.score += continuity;
+    // 行首点号题号最弱：没题型、没连续性、前面也没答案行时不认，
+    // 防正文年份/序号误切。只在已切出过题界之后启用：文档第一题
+    // （如模板的「1.」）没有前文可佐证，光靠选项结构就该认。
+    if (c.isDotted &&
+        c.hint == null &&
+        continuity == 0 &&
+        lastNumber != null &&
+        c.number != 1 &&
+        c.score - continuity < 6) {
+      c.score -= 2;
+      c.reasons.add('行首点号弱佐证 -2');
+    }
+    if (c.score >= 7) {
+      c.pending = false;
+      accepted.add(c);
+      lastNumber = c.number;
+    } else if (c.score >= 4) {
+      c.pending = true;
+      accepted.add(c);
+      lastNumber = c.number;
+    }
+  }
+  return accepted;
+}
+
+/// 把切题评分明细挂到一道题上（仅内存，不进数据库）。
+Question _attachParseInfo(Question question, _Candidate c) {
+  return Question(
+    id: question.id,
+    assignmentId: question.assignmentId,
+    type: question.type,
+    stem: question.stem,
+    options: question.options,
+    answer: question.answer,
+    points: question.points,
+    sortOrder: question.sortOrder,
+    parseScore: c.score,
+    parseReasons: List<String>.from(c.reasons),
+    parsePending: c.pending,
+  );
+}
+
 List<Question> parseFormattedText(String text) {
 final normalized = _normalize(text);
-final marks = _questionMark.allMatches(normalized).toList();
-if (marks.isEmpty) {
+final boundaries = _selectBoundaries(_findCandidates(normalized));
+if (boundaries.isEmpty) {
 throw FormatException('没找到题号，请按“题号开头、一行一道题”的格式写（见 docs/IMPORT_TEMPLATES.md）');
 }
 
 final questions = <Question>[];
-for (var i = 0; i < marks.length; i++) {
-final start = marks[i].end;
-final end = i + 1 < marks.length? marks[i + 1].start: normalized.length;
+for (var i = 0; i < boundaries.length; i++) {
+final start = boundaries[i].markerEnd;
+final end = i + 1 < boundaries.length
+? boundaries[i + 1].start
+: normalized.length;
 final block = normalized.substring(start, end).trim();
 if (block.isEmpty) continue;
 // 一块里粘了两道题时（无标记粘连），尽量劈成两道；劈不开就原样保留一道。
-questions.addAll(_parseBlockWithSplit(block, questions.length));
+final split = _parseBlockWithSplit(block, questions.length);
+// 切题评分明细挂在劈开后的第一道题上（粘连劈开的第二道是无标记题，不挂分）。
+for (var j = 0; j < split.length; j++) {
+questions.add(j == 0 ? _attachParseInfo(split[j], boundaries[i]) : split[j]);
+}
 }
 
 if (questions.isEmpty) {

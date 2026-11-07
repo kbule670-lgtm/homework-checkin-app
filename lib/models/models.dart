@@ -237,6 +237,13 @@ class Question {
   final int points;
   final int sortOrder;
 
+  /// 导入解析时的切题评分（仅内存里用，不进数据库）：
+  /// parseScore 是该题切点的总分，parsePending 表示 4–6 分待确认，
+  /// parseReasons 是评分明细。Excel/CSV/JSON 与手动加的题这三项为空。
+  final int? parseScore;
+  final List<String>? parseReasons;
+  final bool parsePending;
+
   const Question({
     required this.id,
     required this.assignmentId,
@@ -246,6 +253,9 @@ class Question {
     required this.answer,
     required this.points,
     required this.sortOrder,
+    this.parseScore,
+    this.parseReasons,
+    this.parsePending = false,
   });
 
   bool get isChoice => type == QuestionType.choice;
