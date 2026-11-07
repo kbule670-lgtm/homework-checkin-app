@@ -78,6 +78,37 @@ final _bracketAnswer =
 /// 选项标记：`A.` / `A、` / `A:` / `A `（后跟中文或内容）。
 final _optionMark = RegExp(r'([A-E])[.、．:：]');
 
+/// 在一段文字里找一套真正的选项：从 A 起按 A、B、C、D… 连续出现，且每
+/// 个选项都有实质内容。题干里的 "A、B、C、D 四瓶溶液" 只是光秃秃的枚
+/// 举，标记之间没有内容，接不成序列，不算选项——否则会把选择题毒成填
+/// 空，把填空题干从第一个 "A、" 处截断（"维生素" 碎片、"2020年，新冠疫
+/// 情在全球大流行。" 被截断），题干以 "A、B、C、D" 开头的题（冬奥会题）
+/// 更会因题干为空整道被丢。多套序列并存时取最长的，长度相同取最先出现
+/// 的（粘连块里先取第一题的选项）。没有成套选项时返回空列表。
+List<RegExpMatch> _findOptionSequence(String text) {
+final matches = _optionMark.allMatches(text).toList();
+var best = <RegExpMatch>[];
+for (var i = 0; i < matches.length; i++) {
+if (matches[i].group(1) != 'A') continue;
+var j = i;
+var expected = 'A';
+while (j < matches.length && matches[j].group(1) == expected) {
+if (j > i) {
+final gap = text.substring(matches[j - 1].end, matches[j].start);
+if (gap.trim().isEmpty) break;
+}
+expected = String.fromCharCode(expected.codeUnitAt(0) + 1);
+j++;
+}
+final seq = matches.sublist(i, j);
+if (seq.length < 2) continue;
+final afterEnd = j < matches.length ? matches[j].start : text.length;
+if (text.substring(matches[j - 1].end, afterEnd).trim().isEmpty) continue;
+if (seq.length > best.length) best = seq;
+}
+return best;
+}
+
 /// 解析文字版题目（txt / Word / PDF 文字层提取后的文本共用）。
 ///
 /// 认的排版：
@@ -113,6 +144,11 @@ final _optionMark = RegExp(r'([A-E])[.、．:：]');
 /// <4 不切。跳号/重复号不以连续性为必要条件；跨页不自动切
 /// （没有标记就不会切）；没选项的题也能切（不强制要求 A–D）。
 /// 每个切点的得分与明细挂在 Question.parseScore/parseReasons 上。
+///
+/// 切点还有第二路来源：答案行锚定（见 _findAnswerLineCandidates）。每道题都
+/// 以“答案：…”行收尾，答案行之后的第一个非空行就是下一题——不管题号长
+/// 什么样。题号只是标签，不决定切不错切；这么改之后，A1./B1./Q1./没题
+/// 号都不用再逐个打补丁。数字题号那路只负责没答案的题。
 class _Candidate {
   final int start;
   final int markerEnd;
@@ -121,6 +157,7 @@ class _Candidate {
   final bool atLineStart;
   final bool weakForm;
   final bool isDotted;
+  final bool fromAnswerLine;
   int score = 0;
   final List<String> reasons = <String>[];
   bool pending = false;
@@ -133,10 +170,11 @@ class _Candidate {
     required this.atLineStart,
     required this.weakForm,
     required this.isDotted,
+    this.fromAnswerLine = false,
   });
 }
 
-/// 候选标记正则（归一化后括号都是半角）。分组与下面 _findCandidates 一一对应：
+/// 候选标记正则（归一化后括号都是半角）。分组与下面 _findNumberCandidates 一一对应：
 /// 1,2=[n](型) 3,4=[n(型) 5=[n 6,7=(n)(型) 8=第n题 9,10=n(型) 11=行首n.
 final _candidatePattern = RegExp(
   r'\[(\d{1,4})\][ \t]*(?:[\[(]?(单选|多选|判断|填空|简答)[\]\)])?'
@@ -149,9 +187,10 @@ final _candidatePattern = RegExp(
   multiLine: true,
 );
 
-/// 在归一化文本里找全部候选并按记分制打分（不含连续性分，连续性由
-/// _selectBoundaries 按顺序补）。
-List<_Candidate> _findCandidates(String normalized) {
+/// 在归一化文本里找全部数字题号候选（只找、不打分；打分见 _scoreCandidates）。
+/// 数字题号是 `1.` / `[1]` / `第1题` 这类标准写法；A1./B1. 之类怪写法不
+/// 在这里认——它们走答案行锚定（见 _findAnswerLineCandidates）。
+List<_Candidate> _findNumberCandidates(String normalized) {
   final matches = _candidatePattern.allMatches(normalized).toList();
   final candidates = <_Candidate>[];
   for (var i = 0; i < matches.length; i++) {
@@ -199,7 +238,7 @@ List<_Candidate> _findCandidates(String normalized) {
       break;
     }
     if (p < 0) atLineStart = true;
-    final c = _Candidate(
+    candidates.add(_Candidate(
       start: m.start,
       markerEnd: m.end,
       number: number,
@@ -207,16 +246,25 @@ List<_Candidate> _findCandidates(String normalized) {
       atLineStart: atLineStart,
       weakForm: weakForm,
       isDotted: isDotted,
-    );
+    ));
+  }
+  return candidates;
+}
+
+/// 给合并后的候选打分（不含连续性分，连续性由 _selectBoundaries 按顺序补）。
+/// 窗口取到下一个候选或 600 字。
+void _scoreCandidates(List<_Candidate> candidates, String normalized) {
+  for (var i = 0; i < candidates.length; i++) {
+    final c = candidates[i];
     // 题型标记 +3。
-    if (hint != null) {
+    if (c.hint != null) {
       c.score += 3;
       c.reasons.add('题型标记 +3');
     }
     // 候选之后的窗口（到下一候选或 600 字内）：选项结构与题干。
-    final winStart = m.end;
+    final winStart = c.markerEnd;
     final nextStart =
-        i + 1 < matches.length ? matches[i + 1].start : normalized.length;
+        i + 1 < candidates.length ? candidates[i + 1].start : normalized.length;
     final winEnd = winStart + 600 < nextStart
         ? winStart + 600
         : nextStart;
@@ -233,22 +281,22 @@ List<_Candidate> _findCandidates(String normalized) {
       c.reasons.add('题干完整 +2');
     }
     // 前面 48 字内有上一题答案/解析结束标志 +3。
-    final backStart = m.start - 48 < 0 ? 0 : m.start - 48;
-    if (backStart < m.start) {
-      final back = normalized.substring(backStart, m.start);
+    final backStart = c.start - 48 < 0 ? 0 : c.start - 48;
+    if (backStart < c.start) {
+      final back = normalized.substring(backStart, c.start);
       if (RegExp(r'(?:答案|正确答案|解析)[ \t]*[:：]').hasMatch(back)) {
         c.score += 3;
         c.reasons.add('上一题答案/解析 +3');
       }
     }
     // 格式不规范/OCR 歧义的弱标记 -2。
-    if (weakForm) {
+    if (c.weakForm) {
       c.score -= 2;
       c.reasons.add('格式不规范 -2');
     }
     // 疑似年份/句中数字 -3：行中出现且无题型标记，或 1900–2099 且无题型标记。
-    if (hint == null &&
-        (!atLineStart || (number >= 1900 && number <= 2099))) {
+    if (c.hint == null &&
+        (!c.atLineStart || (c.number >= 1900 && c.number <= 2099))) {
       c.score -= 3;
       c.reasons.add('疑似年份/句中数字 -3');
     }
@@ -257,30 +305,136 @@ List<_Candidate> _findCandidates(String normalized) {
       c.score -= 3;
       c.reasons.add('孤立题号 -3');
     }
-    candidates.add(c);
+  }
+}
+
+/// 行首答案行：`答案：B` / `答案 B` / `答案：1869`（行首才算，题干里提到
+/// “答案”两个字不算）。
+final _answerLineStart = RegExp(
+  r'^[ \t]*(?:答案|正确答案)[ \t]*[:：]?',
+  multiLine: true,
+);
+
+/// 行首的讲解/注记行：答案行之后跟的是这些行时，不是新题，是上一题的讲解。
+final _explanationLineStart = RegExp(
+  r'^[ \t]*(?:解析|分析|详解|点评|答案|正确答案|注|附)',
+  multiLine: true,
+);
+
+/// 一行开头的通用标签长度（只量形状，不认具体写法）：`[12]` / `(3)` /
+/// `第3题` / 1–6 位字母数字加分隔符（`A1.` `B1.` `Q1:` `AB12.` `12.` 都
+/// 算）。量不到返回 0。注意：这只是“剥标签”和“像不像题”的形状判断，标
+/// 签长什么样不决定切不错切——切点证据是答案行。
+int _leadingLabelLength(String line) {
+  final m = RegExp(
+    r'^[ \t]*(?:\[[^\]\n]{1,8}\]|\([^)\n]{1,8}\)|第[^\n]{1,8}题|[A-Za-z0-9]{1,6}[.、．)）\]：:])[ \t]*')
+      .firstMatch(line);
+  return m?.end ?? 0;
+}
+
+/// 答案行锚定的候选切点：每道题都以“答案：…”行收尾，所以答案行之后的第一
+/// 个非空行就是下一题的开头——不管题号长什么样（A1./B1./Q1./没题号都
+/// 行），文档第一行也一样。题号只是个标签，不该决定切不错切；切点证据
+/// 是文档结构（答案行），不是题号写法。这才是认题号的根因修法：之前只
+/// 认 `1.` 这类数字题号，遇到 A1. 就得打补丁，B1. 又得再打一个，永远
+/// 打不完。讲解行（解析/注）不算新题；没标签、没空、行尾没标点的 stray
+/// 句子也不算。
+List<_Candidate> _findAnswerLineCandidates(String normalized) {
+  final lines = normalized.split('\n');
+  final lineStarts = <int>[];
+  var offset = 0;
+  for (final line in lines) {
+    lineStarts.add(offset);
+    offset += line.length + 1;
+  }
+  bool looksLikeQuestion(int li) {
+    final line = lines[li];
+    final trimmed = line.trim();
+    if (trimmed.isEmpty) return false;
+    if (_leadingLabelLength(line) > 0) return true;
+    if (RegExp(r'_{2,}|_[^_\s]').hasMatch(trimmed)) return true;
+    if (trimmed.endsWith(':') ||
+        trimmed.endsWith('：') ||
+        trimmed.endsWith('?') ||
+        trimmed.endsWith('？')) {
+      return true;
+    }
+    // 选项在后面几行：只看本行加后两行，别把下一题的选项算进来。
+    final following = <String>[line];
+    var j = li + 1;
+    while (j < lines.length && following.length < 3) {
+      if (lines[j].trim().isNotEmpty) {
+        following.add(lines[j]);
+      }
+      j++;
+    }
+    return _hasOptionStructure(following.join('\n'));
+  }
+  final anchorLines = <int>[];
+  final firstNonEmpty = lines.indexWhere((l) => l.trim().isNotEmpty);
+  if (firstNonEmpty >= 0) anchorLines.add(firstNonEmpty);
+  for (var i = 0; i < lines.length; i++) {
+    if (!_answerLineStart.hasMatch(lines[i])) continue;
+    var j = i + 1;
+    while (j < lines.length && lines[j].trim().isEmpty) {
+      j++;
+    }
+    if (j < lines.length) anchorLines.add(j);
+  }
+  final candidates = <_Candidate>[];
+  for (final li in anchorLines) {
+    final line = lines[li];
+    if (_explanationLineStart.hasMatch(line)) continue;
+    if (!looksLikeQuestion(li)) continue;
+    final leadingSpaces = line.length - line.trimLeft().length;
+    candidates.add(_Candidate(
+      start: lineStarts[li] + leadingSpaces,
+      markerEnd: lineStarts[li] + _leadingLabelLength(line),
+      number: 0,
+      hint: null,
+      atLineStart: true,
+      weakForm: false,
+      isDotted: false,
+      fromAnswerLine: true,
+    ));
   }
   return candidates;
+}
+
+/// 合并两路候选，按位置排序；同一行上只留一个，数字题号优先（它带真题
+/// 号，答案行锚定的只有合成连续分）。
+List<_Candidate> _mergeCandidates(
+    List<_Candidate> a, List<_Candidate> b, String normalized) {
+  final all = [...a, ...b]..sort((x, y) => x.start.compareTo(y.start));
+  final merged = <_Candidate>[];
+  for (final c in all) {
+    if (merged.isEmpty) {
+      merged.add(c);
+      continue;
+    }
+    final last = merged.last;
+    final between = normalized.substring(last.start, c.start);
+    if (!between.contains('\n')) {
+      if (last.fromAnswerLine && !c.fromAnswerLine) {
+        merged[merged.length - 1] = c;
+      }
+      continue;
+    }
+    merged.add(c);
+  }
+  return merged;
 }
 
 /// 窗口里有没有选项结构：A、B 两个标记按序出现，或「正确/错误」成对出现。
 bool _hasOptionStructure(String window) {
   if (window.contains('正确') && window.contains('错误')) return true;
-  final matches = _optionMark.allMatches(window).toList();
-  var seenA = false;
-  for (final m in matches) {
-    final letter = m.group(1);
-    if (letter == 'A') {
-      seenA = true;
-    } else if (letter == 'B' && seenA) {
-      return true;
-    }
-  }
-  return false;
+  return _findOptionSequence(window).length >= 2;
 }
 
 /// 窗口里第一个选项标记/答案行之前的文字（即题干），换行折成空格。
 String _stemBeforeOptions(String window) {
-  final optionAt = _optionMark.firstMatch(window)?.start;
+  final seq = _findOptionSequence(window);
+  final optionAt = seq.isEmpty ? null : seq.first.start;
   final answerAt =
       RegExp(r'(?:答案|正确答案)[ \t]*[:：]').firstMatch(window)?.start;
   var end = window.length;
@@ -296,7 +450,11 @@ List<_Candidate> _selectBoundaries(List<_Candidate> candidates) {
   int? lastNumber;
   for (final c in candidates) {
     var continuity = 0;
-    if (lastNumber == null) {
+    if (c.fromAnswerLine) {
+      // 答案行锚定的切点：上一题答案行就是最强的连续性证据，不看题号。
+      continuity = 2;
+      c.reasons.add('答案行后新题 +2');
+    } else if (lastNumber == null) {
       // 首题没有前文可佐证，不看连续性，直接给分。
       continuity = 2;
       c.reasons.add('首题不计连续 +2');
@@ -327,11 +485,11 @@ List<_Candidate> _selectBoundaries(List<_Candidate> candidates) {
     if (c.score >= 7) {
       c.pending = false;
       accepted.add(c);
-      lastNumber = c.number;
+      lastNumber = c.fromAnswerLine ? (lastNumber ?? 0) + 1 : c.number;
     } else if (c.score >= 4) {
       c.pending = true;
       accepted.add(c);
-      lastNumber = c.number;
+      lastNumber = c.fromAnswerLine ? (lastNumber ?? 0) + 1 : c.number;
     }
   }
   return accepted;
@@ -356,7 +514,12 @@ Question _attachParseInfo(Question question, _Candidate c) {
 
 List<Question> parseFormattedText(String text) {
 final normalized = _normalize(text);
-final boundaries = _selectBoundaries(_findCandidates(normalized));
+final merged = _mergeCandidates(
+_findNumberCandidates(normalized),
+_findAnswerLineCandidates(normalized),
+normalized);
+_scoreCandidates(merged, normalized);
+final boundaries = _selectBoundaries(merged);
 if (boundaries.isEmpty) {
 throw FormatException('没找到题号，请按“题号开头、一行一道题”的格式写（见 docs/IMPORT_TEMPLATES.md）');
 }
@@ -389,25 +552,49 @@ Question? _parseBlock(String block, int sortOrder) {
 var working = block;
 var answer = '';
 
-// 1) 先抠答案行。字母答案优先；字母不匹配时按填空文字答案收。
+// 1) 先抠答案行：字母答案与文字答案哪个在前面先出现就认哪个（不能字
+// 母优先——一块里粘了 "答案：1869" 和 "答案：A" 两行时，字母优先会错认
+// 成后一行的 A，把 1869 漏进题干）。抠完再把块里残留的行首答案行清掉，
+// 免得下一题的答案漏进本题题干。
 final answerMatch = _answerLine.firstMatch(working);
-if (answerMatch!= null) {
+final fillMatch = _fillAnswerLine.firstMatch(working);
+final useLetter = answerMatch != null &&
+(fillMatch == null || answerMatch.start <= fillMatch.start);
+if (useLetter) {
 answer = answerMatch
 .group(1)!
 .replaceAll(RegExp(r'[\s,，、]'), '')
 .toUpperCase();
 working = working.replaceFirst(_answerLine, '').trim();
-} else {
-final fillMatch = _fillAnswerLine.firstMatch(working);
-if (fillMatch!= null) {
-final candidate = fillMatch.group(1)!.trim();
+} else if (fillMatch != null) {
+var candidate = fillMatch.group(1)!.trim();
 // 排除“答案：”后面跟的是解析等说明文字的极端情况：只收较短的答案。
 if (candidate.isNotEmpty && candidate.length <= 40) {
+// 文字答案若是单个 A-E 字母串（如 "答案b"），转大写，与字母答案一致。
+if (RegExp(r'^[A-Ea-e]([,\s、，]*[A-Ea-e])*$').hasMatch(candidate)) {
+candidate =
+candidate.replaceAll(RegExp(r'[\s,，、]'), '').toUpperCase();
+}
 answer = candidate;
 working = working.replaceFirst(_fillAnswerLine, '').trim();
 }
 }
-}
+// 残留的行首答案行（粘连块里下一题的答案）从题干里清掉；正文里 "答案是…"
+// 这种句子不带冒号、不以答案行起首，不会被误删。
+working = working
+.replaceAll(
+RegExp(r'^[ \t]*(?:答案|正确答案)[ \t]*[:：][^\n]*$',
+multiLine: true),
+'')
+.replaceAll(
+RegExp(r'^[ \t]*(?:答案|正确答案)[ \t]+[A-Ea-e0-9][^\n]*$',
+multiLine: true),
+'')
+.replaceAll(
+RegExp(r'^[ \t]*(?:解析|分析|详解|点评|注|附)[ \t]*[:：][^\n]*$',
+multiLine: true),
+'')
+.trim();
 
 // 2) 没答案行时，认题干末尾的（B）。
 if (answer.isEmpty) {
@@ -418,8 +605,10 @@ working = working.replaceFirst(_bracketAnswer, '').trim();
 }
 }
 
-// 3) 抠选项：按 A. B. C. D. E. 标记切分，标记之间即选项内容。
-final optionMatches = _optionMark.allMatches(working).toList();
+// 3) 抠选项：找一套从 A 起连续、每项都有内容的选项序列；序列本身已保
+// 证从 A 起连续，不再需要事后校验与回退。没有成套序列时整段都是题干
+// （填空题题干里的 "A、B、C、D" 枚举不再把题干截断）。
+final optionMatches = _findOptionSequence(working);
 final options = <String>[];
 String stem;
 if (optionMatches.length >= 2) {
@@ -431,19 +620,6 @@ final e = j + 1 < optionMatches.length
 : working.length;
 final content = working.substring(s, e).trim();
 if (content.isNotEmpty) options.add(content);
-}
-// 选项标记必须从 A 起连续，否则视为误切（题干里的 A 股之类），回退为填空。
-const letters = ['A', 'B', 'C', 'D', 'E'];
-var continuous = true;
-for (var j = 0; j < options.length; j++) {
-if (optionMatches[j].group(1)!= letters[j]) {
-continuous = false;
-break;
-}
-}
-if (!continuous) {
-options.clear();
-stem = working;
 }
 } else {
 stem = working;
@@ -474,17 +650,7 @@ return RegExp(r'(?:答案|正确答案)\s*[:：]').allMatches(text).length;
 
 /// 文本里是否有一套完整的 A–D 选项标记（分隔符形式，按序出现）。
 bool _hasFullOptionSet(String text) {
-final matches =
-RegExp(r'([ABCDE])[ \t]*[.、．:：]').allMatches(text).toList();
-const letters = ['A', 'B', 'C', 'D'];
-var next = 0;
-for (final m in matches) {
-if (m.group(1) == letters[next]) {
-next += 1;
-if (next >= 4) return true;
-}
-}
-return false;
+return _findOptionSequence(text).length >= 4;
 }
 
 /// 一道题是否粘连嫌疑：块里有多个答案行，或选项里混进了下一题的内容
@@ -532,7 +698,6 @@ break;
 if (stemStart == null || stemStart >= block.length) return null;
 final firstPart = block.substring(0, stemStart).trim();
 final secondPart = block.substring(stemStart);
-if (!_hasFullOptionSet(secondPart)) return null;
 if (_countAnswerLines(secondPart) < 1) return null;
 final first = _parseBlock(firstPart, sortOrder);
 final second = _parseBlock(secondPart, sortOrder + 1);
@@ -543,6 +708,17 @@ if (second.stem.length < 4) return null;
 for (final option in second.options) {
 if (option.contains('答案') || _questionMark.hasMatch(option)) return null;
 }
+// 第二部分得像一道真题：要么有完整选项集（选择题），要么是带空、以冒号
+// 或问号收尾的填空题且有答案；解析/分析开头的说明文字不算。
+final looksLikeChoice = _hasFullOptionSet(secondPart);
+final looksLikeFill = second.answer.isNotEmpty &&
+!RegExp(r'^(解析|分析|详解|点评)').hasMatch(second.stem) &&
+(RegExp(r'_{2,}|_[^_\s]').hasMatch(second.stem) ||
+second.stem.endsWith(':') ||
+second.stem.endsWith('：') ||
+second.stem.endsWith('?') ||
+second.stem.endsWith('？'));
+if (!looksLikeChoice && !looksLikeFill) return null;
 return <Question>[first, second];
 }
 
