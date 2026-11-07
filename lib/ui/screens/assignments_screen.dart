@@ -4,6 +4,8 @@
 /// 与状态角标（学生：未交 / 已交 / 迟交 / 已批改）。老师右下角有新建作业入口。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -51,73 +53,13 @@ class _AssignmentsScreenState extends State<AssignmentsScreen> {
       _error = null;
     });
     try {
-      final uid = SupabaseService.client.auth.currentUser?.id ?? '';
-      Profile? profile;
-      if (uid.isNotEmpty) {
-        final row = await SupabaseService.client
-            .from('profiles')
-            .select()
-            .eq('id', uid)
-            .maybeSingle();
-        if (row != null) {
-          profile = Profile.fromJson(Map<String, dynamic>.from(row));
-        }
-      }
-      final isTeacher = profile?.isTeacher ?? false;
-
-      final classes = <SchoolClass>[];
-      if (profile != null) {
-        if (isTeacher) {
-          final rows = await SupabaseService.client
-              .from('classes')
-              .select()
-              .eq('teacher_id', profile.id)
-              .order('created_at', ascending: true);
-          classes.addAll((rows as List).map(
-              (e) => SchoolClass.fromJson(Map<String, dynamic>.from(e))));
-        } else {
-          final memberRows = await SupabaseService.client
-              .from('class_members')
-              .select('class_id')
-              .eq('student_id', profile.id);
-          final classIds = (memberRows as List)
-              .map((e) => e['class_id'].toString())
-              .toList();
-          if (classIds.isNotEmpty) {
-            final rows = await SupabaseService.client
-                .from('classes')
-                .select()
-                .inFilter('id', classIds)
-                .order('created_at', ascending: true);
-            classes.addAll((rows as List).map(
-                (e) => SchoolClass.fromJson(Map<String, dynamic>.from(e))));
-          }
-        }
-      }
-
-      final assignments = await _assignmentService.myAssignments();
-
-      final mySubmissions = <String, Submission>{};
-      if (!isTeacher && uid.isNotEmpty && assignments.isNotEmpty) {
-        final assignmentIds = assignments.map((a) => a.id).toList();
-        final rows = await SupabaseService.client
-            .from('submissions')
-            .select()
-            .eq('student_id', uid)
-            .inFilter('assignment_id', assignmentIds);
-        for (final row in (rows as List)) {
-          final s = Submission.fromJson(Map<String, dynamic>.from(row));
-          mySubmissions[s.assignmentId] = s;
-        }
-      }
-
+      // 全部请求加 15 秒上限：弱网时不再无限转圈，超时给重试。
+      await _fetchAll().timeout(const Duration(seconds: 15));
+    } on TimeoutException {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _isTeacher = isTeacher;
-        _classes = classes;
-        _assignments = assignments;
-        _mySubmissions = mySubmissions;
+        _error = '加载超时，请检查网络后重试';
       });
     } catch (e) {
       if (!mounted) return;
@@ -126,6 +68,87 @@ class _AssignmentsScreenState extends State<AssignmentsScreen> {
         _error = '加载失败：$e';
       });
     }
+  }
+
+  Future<void> _fetchAll() async {
+    final uid = SupabaseService.client.auth.currentUser?.id ?? '';
+    Profile? profile;
+    if (uid.isNotEmpty) {
+      final row = await SupabaseService.client
+          .from('profiles')
+          .select()
+          .eq('id', uid)
+          .maybeSingle();
+      if (row != null) {
+        profile = Profile.fromJson(Map<String, dynamic>.from(row));
+      }
+    }
+    final isTeacher = profile?.isTeacher ?? false;
+
+    // 班级列表与作业列表互不依赖，并行取，不再一个一个等。
+    final results = await Future.wait<dynamic>([
+      profile != null
+          ? _loadClassesFor(profile, isTeacher)
+          : Future<List<SchoolClass>>.value(<SchoolClass>[]),
+      _assignmentService.myAssignments(),
+    ]);
+    final classes = results[0] as List<SchoolClass>;
+    final assignments = results[1] as List<Assignment>;
+
+    final mySubmissions = <String, Submission>{};
+    if (!isTeacher && uid.isNotEmpty && assignments.isNotEmpty) {
+      final assignmentIds = assignments.map((a) => a.id).toList();
+      final rows = await SupabaseService.client
+          .from('submissions')
+          .select()
+          .eq('student_id', uid)
+          .inFilter('assignment_id', assignmentIds);
+      for (final row in (rows as List)) {
+        final s = Submission.fromJson(Map<String, dynamic>.from(row));
+        mySubmissions[s.assignmentId] = s;
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _isTeacher = isTeacher;
+      _classes = classes;
+      _assignments = assignments;
+      _mySubmissions = mySubmissions;
+    });
+  }
+
+  Future<List<SchoolClass>> _loadClassesFor(
+      Profile profile, bool isTeacher) async {
+    final classes = <SchoolClass>[];
+    if (isTeacher) {
+      final rows = await SupabaseService.client
+          .from('classes')
+          .select()
+          .eq('teacher_id', profile.id)
+          .order('created_at', ascending: true);
+      classes.addAll((rows as List).map(
+          (e) => SchoolClass.fromJson(Map<String, dynamic>.from(e))));
+    } else {
+      final memberRows = await SupabaseService.client
+          .from('class_members')
+          .select('class_id')
+          .eq('student_id', profile.id);
+      final classIds = (memberRows as List)
+          .map((e) => e['class_id'].toString())
+          .toList();
+      if (classIds.isNotEmpty) {
+        final rows = await SupabaseService.client
+            .from('classes')
+            .select()
+            .inFilter('id', classIds)
+            .order('created_at', ascending: true);
+        classes.addAll((rows as List).map(
+            (e) => SchoolClass.fromJson(Map<String, dynamic>.from(e))));
+      }
+    }
+    return classes;
   }
 
   List<Assignment> get _filtered {
@@ -172,17 +195,22 @@ class _AssignmentsScreenState extends State<AssignmentsScreen> {
     // 这里再放一个会上下出现两个“作业”。刷新用下拉刷新（RefreshIndicator）。
     return Scaffold(
       floatingActionButton: _isTeacher
-          ? FloatingActionButton(
-              onPressed: () async {
-                final created = await Navigator.of(context).push<bool>(
-                  MaterialPageRoute(
-                    builder: (_) => const AssignmentCreateScreen(),
-                  ),
-                );
-                if (created == true) _load();
-              },
-              tooltip: '新建作业',
-              child: const Icon(Icons.add),
+          ? Padding(
+              // 本页是嵌在 HomeScreen 里的二级 Scaffold，页面底部会伸到
+              // 底部栏下面（extendBody），加号不垫高会被底部栏盖住点不着。
+              padding: const EdgeInsets.only(bottom: 108),
+              child: FloatingActionButton(
+                onPressed: () async {
+                  final created = await Navigator.of(context).push<bool>(
+                    MaterialPageRoute(
+                      builder: (_) => const AssignmentCreateScreen(),
+                    ),
+                  );
+                  if (created == true) _load();
+                },
+                tooltip: '新建作业',
+                child: const Icon(Icons.add),
+              ),
             )
           : null,
       body: Column(

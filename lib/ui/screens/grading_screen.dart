@@ -6,6 +6,8 @@
 /// 提交后该学生状态变已批改。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../../models/models.dart';
@@ -52,47 +54,13 @@ class _GradingScreenState extends State<GradingScreen> {
       _error = null;
     });
     try {
-      final memberRows = await SupabaseService.client
-          .from('class_members')
-          .select()
-          .eq('class_id', _assignment.classId)
-          .order('joined_at', ascending: true);
-      final members = (memberRows as List)
-          .map((e) => ClassMember.fromJson(Map<String, dynamic>.from(e)))
-          .toList();
-      // 班级成员表里没有姓名时，从 profiles 表补真实姓名。
-      final missingNameIds = members
-          .where((m) => (m.studentName ?? '').isEmpty)
-          .map((m) => m.studentId)
-          .toList();
-      final names = <String, String>{};
-      if (missingNameIds.isNotEmpty) {
-        final profileRows = await SupabaseService.client
-            .from('profiles')
-            .select('id, real_name')
-            .inFilter('id', missingNameIds);
-        for (final r in (profileRows as List)) {
-          names[(r['id'] ?? '').toString()] =
-              (r['real_name'] ?? '').toString();
-        }
-      }
-      final submissions =
-          await _submissionService.submissionsOf(_assignment.id);
+      // 全部请求加 15 秒上限：弱网时不再无限转圈，超时给重试。
+      await _fetchAll().timeout(const Duration(seconds: 15));
+    } on TimeoutException {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _members = members
-            .map((m) => ClassMember(
-                  id: m.id,
-                  classId: m.classId,
-                  studentId: m.studentId,
-                  studentName: (m.studentName ?? '').isNotEmpty
-                      ? m.studentName
-                      : names[m.studentId],
-                  joinedAt: m.joinedAt,
-                ))
-            .toList();
-        _submissions = submissions;
+        _error = '加载超时，请检查网络后重试';
       });
     } catch (e) {
       if (!mounted) return;
@@ -101,6 +69,54 @@ class _GradingScreenState extends State<GradingScreen> {
         _error = '加载失败：$e';
       });
     }
+  }
+
+  Future<void> _fetchAll() async {
+    // 成员列表与提交列表互不依赖，并行取。
+    final results = await Future.wait<dynamic>([
+      SupabaseService.client
+          .from('class_members')
+          .select()
+          .eq('class_id', _assignment.classId)
+          .order('joined_at', ascending: true),
+      _submissionService.submissionsOf(_assignment.id),
+    ]);
+    final members = (results[0] as List)
+        .map((e) => ClassMember.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
+    final submissions = results[1] as List<Submission>;
+    // 班级成员表里没有姓名时，从 profiles 表补真实姓名。
+    final missingNameIds = members
+        .where((m) => (m.studentName ?? '').isEmpty)
+        .map((m) => m.studentId)
+        .toList();
+    final names = <String, String>{};
+    if (missingNameIds.isNotEmpty) {
+      final profileRows = await SupabaseService.client
+          .from('profiles')
+          .select('id, real_name')
+          .inFilter('id', missingNameIds);
+      for (final r in (profileRows as List)) {
+        names[(r['id'] ?? '').toString()] =
+            (r['real_name'] ?? '').toString();
+      }
+    }
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _members = members
+          .map((m) => ClassMember(
+                id: m.id,
+                classId: m.classId,
+                studentId: m.studentId,
+                studentName: (m.studentName ?? '').isNotEmpty
+                    ? m.studentName
+                    : names[m.studentId],
+                joinedAt: m.joinedAt,
+              ))
+          .toList();
+      _submissions = submissions;
+    });
   }
 
   String _nameOf(ClassMember member) {

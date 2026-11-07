@@ -3,6 +3,8 @@
 /// 列表每项显示班级名、科目、邀请码、人数；点一项进班级详情。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -51,17 +53,25 @@ class _ClassesScreenState extends State<ClassesScreen> {
   Future<void> _load() async {
     setState(() => _loading = true);
     try {
-      final classes = await _service.myClasses();
-      final counts = <String, int>{};
-      for (final c in classes) {
-        final members = await _service.membersOf(c.id);
-        counts[c.id] = members.length;
-      }
+      // 各班人数互不依赖，并行取；全部请求加 15 秒上限，超时不再无限转圈。
+      final classes =
+          await _service.myClasses().timeout(const Duration(seconds: 15));
+      final memberLists = await Future.wait(
+        classes.map((c) => _service.membersOf(c.id)),
+      ).timeout(const Duration(seconds: 15));
+      final counts = <String, int>{
+        for (var i = 0; i < classes.length; i++)
+          classes[i].id: memberLists[i].length,
+      };
       if (!mounted) return;
       setState(() {
         _classes = classes;
         _memberCounts = counts;
       });
+    } on TimeoutException {
+      if (mounted) {
+        showAppSnackBar(context, '加载超时，请检查网络后重试', isError: true);
+      }
     } on StateError catch (e) {
       if (mounted) showAppSnackBar(context, e.message, isError: true);
     } catch (_) {

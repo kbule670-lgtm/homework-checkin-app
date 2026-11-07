@@ -4,9 +4,9 @@
 /// 自带液态玻璃）；安卓和低版本 iOS 走自绘 GlassTabBar 兜底。
 ///
 /// 第 3 个 tab 按身份区分：老师是“批改”，学生是“我的提交”。
-/// 作业 tab 与第 3 tab 都复用 B 组的 AssignmentsScreen（无参构造）：
-/// 老师在作业列表里点作业进详情再进批改页（GradingScreen 需传 assignment，
-/// 不能直接当 tab 页）；学生则在同一列表里看自己的提交状态。
+/// 作业 tab 是作业清单（布置了什么、截止到哪天）；第 3 tab 是待办：
+/// 老师看每份作业“已交 x / 共 y 人，待批改 z 份”直接进批改，
+/// 学生只看自己交过的和分数、评语。两个 tab 不再是同一个页面。
 library;
 
 import 'package:flutter/material.dart';
@@ -18,6 +18,8 @@ import '../theme.dart';
 import '../widgets/glass_tab_bar.dart';
 import 'assignments_screen.dart';
 import 'classes_screen.dart';
+import 'grading_queue_screen.dart';
+import 'my_submissions_screen.dart';
 import 'profile_screen.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -65,7 +67,9 @@ class _HomeScreenState extends State<HomeScreen> {
     final pages = <Widget>[
       const AssignmentsScreen(),
       ClassesScreen(profile: profile),
-      const AssignmentsScreen(),
+      _isTeacher
+          ? const GradingQueueScreen()
+          : const MySubmissionsScreen(),
       ProfileScreen(profile: profile),
     ];
     return Scaffold(

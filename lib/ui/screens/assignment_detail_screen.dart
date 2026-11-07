@@ -4,6 +4,8 @@
 /// 老师：看该作业统计（已交 X / 共 Y、迟交 Z）与提交列表入口。
 library;
 
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
@@ -58,52 +60,13 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
       _error = null;
     });
     try {
-      final uid = SupabaseService.client.auth.currentUser?.id ?? '';
-      var isTeacher = false;
-      if (uid.isNotEmpty) {
-        final row = await SupabaseService.client
-            .from('profiles')
-            .select('role')
-            .eq('id', uid)
-            .maybeSingle();
-        isTeacher = row != null && row['role'] == 'teacher';
-      }
-
-      Submission? mySubmission;
-      Grade? myGrade;
-      var submissions = <Submission>[];
-      var memberCount = 0;
-      if (isTeacher) {
-        submissions =
-            await _submissionService.submissionsOf(_assignment.id);
-        final memberRows = await SupabaseService.client
-            .from('class_members')
-            .select('id')
-            .eq('class_id', _assignment.classId);
-        memberCount = (memberRows as List).length;
-      } else if (uid.isNotEmpty) {
-        final row = await SupabaseService.client
-            .from('submissions')
-            .select()
-            .eq('assignment_id', _assignment.id)
-            .eq('student_id', uid)
-            .maybeSingle();
-        if (row != null) {
-          mySubmission =
-              Submission.fromJson(Map<String, dynamic>.from(row));
-          myGrade = await _submissionService
-              .gradeOfSubmission(mySubmission.id);
-        }
-      }
-
+      // 全部请求加 15 秒上限：弱网时不再无限转圈，超时给重试。
+      await _fetchAll().timeout(const Duration(seconds: 15));
+    } on TimeoutException {
       if (!mounted) return;
       setState(() {
         _loading = false;
-        _isTeacher = isTeacher;
-        _mySubmission = mySubmission;
-        _myGrade = myGrade;
-        _submissions = submissions;
-        _memberCount = memberCount;
+        _error = '加载超时，请检查网络后重试';
       });
     } catch (e) {
       if (!mounted) return;
@@ -112,6 +75,59 @@ class _AssignmentDetailScreenState extends State<AssignmentDetailScreen> {
         _error = '加载失败：$e';
       });
     }
+  }
+
+  Future<void> _fetchAll() async {
+    final uid = SupabaseService.client.auth.currentUser?.id ?? '';
+    var isTeacher = false;
+    if (uid.isNotEmpty) {
+      final row = await SupabaseService.client
+          .from('profiles')
+          .select('role')
+          .eq('id', uid)
+          .maybeSingle();
+      isTeacher = row != null && row['role'] == 'teacher';
+    }
+
+    Submission? mySubmission;
+    Grade? myGrade;
+    var submissions = <Submission>[];
+    var memberCount = 0;
+    if (isTeacher) {
+      // 提交列表与班级人数互不依赖，并行取。
+      final results = await Future.wait<dynamic>([
+        _submissionService.submissionsOf(_assignment.id),
+        SupabaseService.client
+            .from('class_members')
+            .select('id')
+            .eq('class_id', _assignment.classId),
+      ]);
+      submissions = results[0] as List<Submission>;
+      memberCount = (results[1] as List).length;
+    } else if (uid.isNotEmpty) {
+      final row = await SupabaseService.client
+          .from('submissions')
+          .select()
+          .eq('assignment_id', _assignment.id)
+          .eq('student_id', uid)
+          .maybeSingle();
+      if (row != null) {
+        mySubmission =
+            Submission.fromJson(Map<String, dynamic>.from(row));
+        myGrade = await _submissionService
+            .gradeOfSubmission(mySubmission.id);
+      }
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _loading = false;
+      _isTeacher = isTeacher;
+      _mySubmission = mySubmission;
+      _myGrade = myGrade;
+      _submissions = submissions;
+      _memberCount = memberCount;
+    });
   }
 
   void _showMessage(String text) {

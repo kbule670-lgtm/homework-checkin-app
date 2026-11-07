@@ -6,6 +6,8 @@
 /// 给该班所有学生各插一条新作业通知。
 library;
 
+import 'dart:io';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -124,9 +126,20 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
     }
     setState(() => _importing = true);
     try {
-      final result = await FilePicker.platform.pickFiles();
+      // withData: true：iOS 上从 iCloud 选文件时经常拿不到本地路径，
+      // 只给 bytes；这时先把 bytes 写进临时文件再解析，扩展名保持原样。
+      final result = await FilePicker.platform.pickFiles(withData: true);
       if (result == null || result.files.isEmpty) return;
-      final path = result.files.single.path;
+      final picked = result.files.single;
+      var path = picked.path;
+      if ((path == null || path.isEmpty) && picked.bytes != null) {
+        final ext = (picked.extension ?? '').isEmpty
+            ? 'txt'
+            : picked.extension!;
+        path =
+            '${Directory.systemTemp.path}/import_${DateTime.now().millisecondsSinceEpoch}.$ext';
+        await File(path).writeAsBytes(picked.bytes!);
+      }
       if (path == null || path.isEmpty) {
         _showMessage('无法读取该文件，请换一个文件再试');
         return;
@@ -486,27 +499,29 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
             ),
             if (_mode == AssignmentMode.quiz) ...[
               const SizedBox(height: 24),
+              // 标题和两个按钮不要挤在同一行：窄屏上会溢出到屏幕外，
+              // 按钮直接看不见、点不着。标题一行，按钮另起一行平分宽度。
+              Text(
+                '题目（${_questions.length} 道）',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 8),
               Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text(
-                    '题目（${_questions.length} 道）',
-                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _importing ? null : _importQuestions,
+                      icon: const Icon(Icons.upload_file, size: 18),
+                      label: Text(_importing ? '导入中…' : '导入题目'),
+                    ),
                   ),
-                  Row(
-                    children: [
-                      OutlinedButton.icon(
-                        onPressed: _importing ? null : _importQuestions,
-                        icon: const Icon(Icons.upload_file, size: 18),
-                        label: Text(_importing ? '导入中…' : '导入题目'),
-                      ),
-                      const SizedBox(width: 8),
-                      OutlinedButton.icon(
-                        onPressed: _addQuestionManually,
-                        icon: const Icon(Icons.add, size: 18),
-                        label: const Text('手动加一题'),
-                      ),
-                    ],
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: _addQuestionManually,
+                      icon: const Icon(Icons.add, size: 18),
+                      label: const Text('手动加一题'),
+                    ),
                   ),
                 ],
               ),
