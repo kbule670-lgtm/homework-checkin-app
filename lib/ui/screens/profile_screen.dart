@@ -110,7 +110,7 @@ class ProfileScreen extends StatelessWidget {
         const SizedBox(height: 16),
         const Center(
           child: Text(
-            '作业打卡 1.0.3',
+            '作业打卡 1.0.4',
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
           ),
         ),
