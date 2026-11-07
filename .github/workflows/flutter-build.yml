@@ -1,6 +1,6 @@
 # 师生作业打卡 App（简易版）— GitHub Actions 编译工作流
 #
-# 用途：云端 Mac 上编译出未签名 HomeworkCheckin-V3.apk + HomeworkCheckin-V3.ipa（全能签安装）。
+# 用途：云端 Mac 上编译出未签名 HomeworkCheckin-V4.apk + HomeworkCheckin-V4.ipa（全能签安装）。
 # 命名规矩（2026-11-06 用户亲口定）：安装包用 App名+第n版；2026-11-06 20:38 用户同意换英文名，
 # 避免中文文件名导致 Muse 文件预览卡住，App 内显示名仍是作业打卡，不受文件名影响。
 # 铁律：本地先写完备齐、静态自查，再整批一次上传；本工作流只在
@@ -114,23 +114,23 @@ jobs:
         # flutter build ios 只产出 Runner.app；下一步把它打包成未签名 .ipa
         run: flutter build ios --release --no-codesign --dart-define=SUPABASE_URL=${{ secrets.SUPABASE_URL }} --dart-define=SUPABASE_ANON_KEY=${{ secrets.SUPABASE_ANON_KEY }}
 
-      - name: 打包产物为 HomeworkCheckin-V3.apk / HomeworkCheckin-V3.ipa（未签名）
+      - name: 打包产物为 HomeworkCheckin-V4.apk / HomeworkCheckin-V4.ipa（未签名）
         run: |
           set -e
           mkdir -p dist
-          cp build/app/outputs/flutter-apk/app-release.apk dist/HomeworkCheckin-V3.apk
+          cp build/app/outputs/flutter-apk/app-release.apk dist/HomeworkCheckin-V4.apk
           # 把 Runner.app 包成 Payload/xxx.app 再 zip 成 .ipa（全能签可装）
           rm -rf dist/Payload
           mkdir -p dist/Payload
           cp -r build/ios/iphoneos/Runner.app dist/Payload/
-          (cd dist && zip -r -q HomeworkCheckin-V3.ipa Payload && rm -rf Payload)
+          (cd dist && zip -r -q HomeworkCheckin-V4.ipa Payload && rm -rf Payload)
           ls -lh dist/
 
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: homework-checkin-3
+          name: homework-checkin-4
           path: |
-            dist/HomeworkCheckin-V3.apk
-            dist/HomeworkCheckin-V3.ipa
+            dist/HomeworkCheckin-V4.apk
+            dist/HomeworkCheckin-V4.ipa
           retention-days: 30

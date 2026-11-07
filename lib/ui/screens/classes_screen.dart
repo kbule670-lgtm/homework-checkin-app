@@ -261,15 +261,16 @@ class _ClassesScreenState extends State<ClassesScreen> {
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: WeChatCard(
-                  onTap: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
+                  onTap: () async {
+                    final changed = await Navigator.of(context).push<bool>(
+                      MaterialPageRoute<bool>(
                         builder: (_) => ClassDetailScreen(
                           schoolClass: schoolClass,
                           profile: widget.profile,
                         ),
                       ),
                     );
+                    if (changed == true) _load();
                   },
                   child: Row(
                     children: <Widget>[

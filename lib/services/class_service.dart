@@ -194,6 +194,45 @@ class ClassService {
     return schoolClass;
   }
 
+  /// 解散班级：只删 classes 的一行；成员、作业、题目、提交、批改、通知
+  /// 全是 on delete cascade，数据库会连带清掉。RLS 的 classes_teacher
+  /// 策略是 for all，只有建班老师本人能删；学生调这个接口会被 RLS 拦住。
+  Future<void> deleteClass(String classId) async {
+    if (SupabaseService.isDemoMode) {
+      _demoClasses.removeWhere((c) => c.id == classId);
+      _demoMembers.removeWhere((m) => m.classId == classId);
+      return;
+    }
+    if (!SupabaseService.isConfigured) {
+      throw StateError(kSupabaseNotConfiguredHint);
+    }
+    await SupabaseService.client
+        .from('classes')
+        .delete()
+        .eq('id', classId);
+  }
+
+  /// 把学生移出班级（踢人）。RLS 的 members_teacher 策略是 for all，
+  /// 只有该班老师能删成员行；学生调这个接口会被 RLS 拦住。
+  /// 注意：只删成员关系，不删该学生的账号，也不删他已交的作业记录
+  /// （已交的作业属于班级作业历史，删班时才会随班清掉）。
+  Future<void> removeMember(String classId, String studentId) async {
+    if (SupabaseService.isDemoMode) {
+      _demoMembers.removeWhere(
+        (m) => m.classId == classId && m.studentId == studentId,
+      );
+      return;
+    }
+    if (!SupabaseService.isConfigured) {
+      throw StateError(kSupabaseNotConfiguredHint);
+    }
+    await SupabaseService.client
+        .from('class_members')
+        .delete()
+        .eq('class_id', classId)
+        .eq('student_id', studentId);
+  }
+
   /// 班级成员列表。老师在成员列表里能看到真实姓名。
   Future<List<ClassMember>> membersOf(String classId) async {
     if (SupabaseService.isDemoMode) {

@@ -13,7 +13,8 @@ String _normalize(String raw) {
 var text = raw
 .replaceAll('［', '[')
 .replaceAll('］', ']')
-.replaceAll('', ']')
+.replaceAll('【', '[')
+.replaceAll('】', ']')
 .replaceAll('（', '(')
 .replaceAll('）', ')')
 .replaceAll('：', ':')
@@ -69,8 +70,10 @@ final _fillAnswerLine = RegExp(
 r'(?:答案|正确答案)\s*[:：]?\s*([^\n]+)',
 );
 
-/// 题干末尾括号答案：`……（B）` / `……(B)`。
-final _bracketAnswer = RegExp(r'[\(（]\s*([A-E])\s*[\)）]\s*$');
+/// 题干末尾括号答案：`……（B）` / `……(B)`。行尾匹配（multiLine），因为
+/// 选择题的题干后还跟着选项行，括号答案在行尾、不在整块末尾。
+final _bracketAnswer =
+    RegExp(r'[\(（]\s*([A-E])\s*[\)）]\s*$', multiLine: true);
 
 /// 选项标记：`A.` / `A、` / `A:` / `A `（后跟中文或内容）。
 final _optionMark = RegExp(r'([A-E])[.、．:：]');
@@ -89,6 +92,8 @@ final _optionMark = RegExp(r'([A-E])[.、．:：]');
 /// - 选项可分行、可挤在一行；最多认到 E。
 /// - 答案认「答案：B」「答案 B」「题干后（B）」三种写法；填空题答案为文字。
 /// - 缺答案的题不丢弃，answer 为空字符串，调用方应在发作业前提醒老师补全。
+/// - 一块里粘了两道题（多个答案行）时，启发式劈开：从第一个答案行之后
+///   第一个非空行处劈成两道；劈不开就原样保留一道（纯规则，不用 AI）。
 List<Question> parseFormattedText(String text) {
 final normalized = _normalize(text);
 final marks = _questionMark.allMatches(normalized).toList();
@@ -100,52 +105,65 @@ final questions = <Question>[];
 for (var i = 0; i < marks.length; i++) {
 final start = marks[i].end;
 final end = i + 1 < marks.length? marks[i + 1].start: normalized.length;
-var block = normalized.substring(start, end).trim();
+final block = normalized.substring(start, end).trim();
 if (block.isEmpty) continue;
+// 一块里粘了两道题时（无标记粘连），尽量劈成两道；劈不开就原样保留一道。
+questions.addAll(_parseBlockWithSplit(block, questions.length));
+}
 
+if (questions.isEmpty) {
+throw FormatException('没有解析到题目，请检查文件格式（见 docs/IMPORT_TEMPLATES.md）');
+}
+return questions;
+}
+
+/// 解析单个块（题号标记之后到下一题号之前的一段），返回一道题；
+/// 题干为空时返回 null（调用方跳过）。
+Question? _parseBlock(String block, int sortOrder) {
+var working = block;
 var answer = '';
 
 // 1) 先抠答案行。字母答案优先；字母不匹配时按填空文字答案收。
-final answerMatch = _answerLine.firstMatch(block);
+final answerMatch = _answerLine.firstMatch(working);
 if (answerMatch!= null) {
 answer = answerMatch
 .group(1)!
 .replaceAll(RegExp(r'[\s,，、]'), '')
 .toUpperCase();
-block = block.replaceFirst(_answerLine, '').trim();
+working = working.replaceFirst(_answerLine, '').trim();
 } else {
-final fillMatch = _fillAnswerLine.firstMatch(block);
+final fillMatch = _fillAnswerLine.firstMatch(working);
 if (fillMatch!= null) {
 final candidate = fillMatch.group(1)!.trim();
 // 排除“答案：”后面跟的是解析等说明文字的极端情况：只收较短的答案。
 if (candidate.isNotEmpty && candidate.length <= 40) {
 answer = candidate;
-block = block.replaceFirst(_fillAnswerLine, '').trim();
+working = working.replaceFirst(_fillAnswerLine, '').trim();
 }
 }
 }
 
 // 2) 没答案行时，认题干末尾的（B）。
 if (answer.isEmpty) {
-final bracket = _bracketAnswer.firstMatch(block);
+final bracket = _bracketAnswer.firstMatch(working);
 if (bracket!= null) {
 answer = bracket.group(1)!;
-block = block.replaceFirst(_bracketAnswer, '').trim();
+working = working.replaceFirst(_bracketAnswer, '').trim();
 }
 }
 
 // 3) 抠选项：按 A. B. C. D. E. 标记切分，标记之间即选项内容。
-final optionMatches = _optionMark.allMatches(block).toList();
+final optionMatches = _optionMark.allMatches(working).toList();
 final options = <String>[];
 String stem;
 if (optionMatches.length >= 2) {
-stem = block.substring(0, optionMatches.first.start).trim();
+stem = working.substring(0, optionMatches.first.start).trim();
 for (var j = 0; j < optionMatches.length; j++) {
 final s = optionMatches[j].end;
 final e = j + 1 < optionMatches.length
 ? optionMatches[j + 1].start
-: block.length;
-final content = block.substring(s, e).trim();
+: working.length;
+final content = working.substring(s, e).trim();
 if (content.isNotEmpty) options.add(content);
 }
 // 选项标记必须从 A 起连续，否则视为误切（题干里的 A 股之类），回退为填空。
@@ -159,34 +177,107 @@ break;
 }
 if (!continuous) {
 options.clear();
-stem = block;
+stem = working;
 }
 } else {
-stem = block;
+stem = working;
 }
 
 // 题干里残留的换行折成空格；多余的“答案”残行已在上面剥掉。
 stem = stem.replaceAll(RegExp(r'\s*\n\s*'), ' ').trim();
-if (stem.isEmpty) continue;
+if (stem.isEmpty) return null;
 
 final type = options.length >= 2
 ? QuestionType.choice
 : QuestionType.fill;
 // 填空题答案若是字母串（如答案 B）也按文字保留，不做校验。
-questions.add(_build(
+return _build(
 type: type,
 stem: stem,
 options: options,
 answer: answer,
 points: 5,
-sortOrder: questions.length,
-));
+sortOrder: sortOrder,
+);
 }
 
-if (questions.isEmpty) {
-throw FormatException('没有解析到题目，请检查文件格式（见 docs/IMPORT_TEMPLATES.md）');
+/// 一块文本里有几个答案行（“答案：”/“正确答案：”开头的行）。
+int _countAnswerLines(String text) {
+return RegExp(r'(?:答案|正确答案)\s*[:：]').allMatches(text).length;
 }
-return questions;
+
+/// 文本里是否有一套完整的 A–D 选项标记（分隔符形式，按序出现）。
+bool _hasFullOptionSet(String text) {
+final matches =
+RegExp(r'([ABCDE])[ \t]*[.、．:：]').allMatches(text).toList();
+const letters = ['A', 'B', 'C', 'D'];
+var next = 0;
+for (final m in matches) {
+if (m.group(1) == letters[next]) {
+next += 1;
+if (next >= 4) return true;
+}
+}
+return false;
+}
+
+/// 一道题是否粘连嫌疑：块里有多个答案行，或选项里混进了下一题的内容
+/// （选项中出现“答案”或题号标记）。只在这两种情况触发劈开尝试。
+bool _isAdhesionSuspect(Question question, String block) {
+if (_countAnswerLines(block) >= 2) return true;
+for (final option in question.options) {
+if (option.contains('答案') || _questionMark.hasMatch(option)) return true;
+}
+return false;
+}
+
+/// 解析一块文本，粘连嫌疑时尝试无标记启发式劈开（刷题 App 8.ipa 同款，纯规则）。
+///
+/// 劈法：块内有 ≥2 个答案行时，从第一个答案行之后第一个非空行处劈开；
+/// 后半部分必须有完整选项集（A–D 齐全）与至少 1 个答案行，且重解析后
+/// 后半部分不再可疑，否则放弃劈开、原样保留一道。
+/// 注意：没有 AI 复核——劈不开就保留原样，不强行入库两道题。
+List<Question> _parseBlockWithSplit(String block, int sortOrder) {
+final question = _parseBlock(block, sortOrder);
+if (question == null) return <Question>[];
+if (!_isAdhesionSuspect(question, block)) return <Question>[question];
+final split = _trySplitUnmarked(block, sortOrder);
+return split ?? <Question>[question];
+}
+
+/// 无标记粘连启发式劈开：块内 ≥2 个答案行时，尝试把第二题劈出来。
+List<Question>? _trySplitUnmarked(String block, int sortOrder) {
+final answerLines =
+RegExp(r'(?:答案|正确答案)[ \t]*[:：][^\n]*').allMatches(block).toList();
+if (answerLines.length < 2) return null;
+// 第二题题干起点：第一个答案行之后第一个非空行行首（跳过空行）。
+var offset = answerLines[0].end;
+int? stemStart;
+final rest = block.substring(offset);
+for (final line in rest.split('\n')) {
+final trimmed = line.trim();
+if (trimmed.isEmpty) {
+offset += line.length + 1;
+continue;
+}
+stemStart = offset;
+break;
+}
+if (stemStart == null || stemStart >= block.length) return null;
+final firstPart = block.substring(0, stemStart).trim();
+final secondPart = block.substring(stemStart);
+if (!_hasFullOptionSet(secondPart)) return null;
+if (_countAnswerLines(secondPart) < 1) return null;
+final first = _parseBlock(firstPart, sortOrder);
+final second = _parseBlock(secondPart, sortOrder + 1);
+if (first == null || second == null) return null;
+// 第二部分仍可疑（比如还粘着第三题）→ 放弃劈开，原样保留。
+if (_countAnswerLines(secondPart) >= 2) return null;
+if (second.stem.length < 4) return null;
+for (final option in second.options) {
+if (option.contains('答案') || _questionMark.hasMatch(option)) return null;
+}
+return <Question>[first, second];
 }
 
 /// 最小可用 CSV 解析：认双引号包裹，逗号/换行在引号里不算分隔符。
