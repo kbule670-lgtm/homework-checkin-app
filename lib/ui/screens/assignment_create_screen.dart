@@ -197,14 +197,23 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
     }
   }
 
-  /// 手动加一题：题干 + 选项 + 答案。
-  Future<void> _addQuestionManually() async {
-    final stemController = TextEditingController();
-    final answerController = TextEditingController();
-    final pointsController = TextEditingController(text: '5');
-    final optionControllers =
-        List.generate(4, (_) => TextEditingController());
-    var type = QuestionType.choice;
+  /// 手动加一题：题干 + 选项 + 答案。传 existing/index 时是修改已有的题，
+  /// 各输入框按原题预填，确认后原地替换，不用先删再加。
+  Future<void> _addQuestionManually({Question? existing, int? index}) async {
+    final stemController = TextEditingController(text: existing?.stem ?? '');
+    final answerController =
+        TextEditingController(text: existing?.answer ?? '');
+    final pointsController =
+        TextEditingController(text: '${existing?.points ?? 5}');
+    final optionControllers = List.generate(
+      4,
+      (i) => TextEditingController(
+        text: existing != null && i < existing.options.length
+            ? existing.options[i]
+            : '',
+      ),
+    );
+    var type = existing?.type ?? QuestionType.choice;
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -212,7 +221,7 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
         return StatefulBuilder(
           builder: (context, setDialogState) {
             return AlertDialog(
-              title: const Text('手动加一题'),
+              title: Text(existing == null ? '手动加一题' : '修改题目'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -241,6 +250,8 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                         border: OutlineInputBorder(),
                       ),
                       maxLines: 3,
+                      onTapOutside: (_) =>
+                          FocusScope.of(context).unfocus(),
                     ),
                     if (type == QuestionType.choice) ...[
                       const SizedBox(height: 12),
@@ -254,6 +265,8 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                                   '选项 ${String.fromCharCode('A'.codeUnitAt(0) + i)}',
                               border: const OutlineInputBorder(),
                             ),
+                            onTapOutside: (_) =>
+                                FocusScope.of(context).unfocus(),
                           ),
                         ),
                       const Text(
@@ -268,6 +281,8 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                         labelText: '答案',
                         border: OutlineInputBorder(),
                       ),
+                      onTapOutside: (_) =>
+                          FocusScope.of(context).unfocus(),
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -277,6 +292,8 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                         border: OutlineInputBorder(),
                       ),
                       keyboardType: TextInputType.number,
+                      onTapOutside: (_) =>
+                          FocusScope.of(context).unfocus(),
                     ),
                   ],
                 ),
@@ -288,7 +305,7 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
                 ),
                 FilledButton(
                   onPressed: () => Navigator.of(dialogContext).pop(true),
-                  child: const Text('加入'),
+                  child: Text(existing == null ? '加入' : '保存'),
                 ),
               ],
             );
@@ -313,21 +330,40 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
       _showMessage('选择题至少要有两个选项');
       return;
     }
+    // 选择题答案若只填了一个字母，必须是已有选项的序号（A–D…），
+    // 小写自动转大写；填选项内容时原样保存。
+    var finalAnswer = answer;
+    if (type == QuestionType.choice && answer.length == 1) {
+      final upper = answer.toUpperCase();
+      final code = upper.codeUnitAt(0);
+      if (code >= 65 && code <= 90 && !options.contains(answer)) {
+        final idx = code - 65;
+        if (idx < 0 || idx >= options.length) {
+          _showMessage(
+            '答案填 A 到 ${String.fromCharCode(65 + options.length - 1)} 中的一个，或直接填选项内容',
+          );
+          return;
+        }
+        finalAnswer = upper;
+      }
+    }
     final points = int.tryParse(pointsController.text.trim()) ?? 5;
+    final question = Question(
+      id: existing?.id ?? '',
+      assignmentId: existing?.assignmentId ?? '',
+      type: type,
+      stem: stem,
+      options: options,
+      answer: finalAnswer,
+      points: points,
+      sortOrder: existing?.sortOrder ?? _questions.length,
+    );
     setState(() {
-      _questions = [
-        ..._questions,
-        Question(
-          id: '',
-          assignmentId: '',
-          type: type,
-          stem: stem,
-          options: options,
-          answer: answer,
-          points: points,
-          sortOrder: _questions.length,
-        ),
-      ];
+      if (index != null) {
+        _questions = List.of(_questions)..[index] = question;
+      } else {
+        _questions = [..._questions, question];
+      }
     });
   }
 
@@ -435,214 +471,235 @@ class _AssignmentCreateScreenState extends State<AssignmentCreateScreen> {
     }
     return Scaffold(
       appBar: AppBar(title: const Text('新建作业')),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (widget.classId == null)
-              DropdownButtonFormField<String>(
-                value: _selectedClassId,
-                decoration: const InputDecoration(
-                  labelText: '班级',
-                  border: OutlineInputBorder(),
-                ),
-                items: [
-                  for (final c in _classes)
-                    DropdownMenuItem(value: c.id, child: Text(c.name)),
-                ],
-                onChanged: (value) {
-                  setState(() => _selectedClassId = value);
-                },
-              )
-            else
-              Text('班级：${widget.className ?? ''}',
-                  style: const TextStyle(fontSize: 16)),
-            if (_loadingClasses && widget.classId == null)
-              const Padding(
-                padding: EdgeInsets.only(top: 12),
-                child: LoadingView(),
-              ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _titleController,
-              decoration: const InputDecoration(
-                labelText: '作业标题',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _descriptionController,
-              decoration: const InputDecoration(
-                labelText: '作业说明',
-                border: OutlineInputBorder(),
-              ),
-              maxLines: 4,
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('截止时间'),
-              subtitle: Text(
-                _deadline == null
-                    ? '未选择'
-                    : DateFormat('yyyy年MM月dd日 HH:mm').format(_deadline!),
-              ),
-              trailing: FilledButton.tonal(
-                onPressed: _pickDeadline,
-                child: const Text('选择时间'),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text('作业模式', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            SegmentedButton<AssignmentMode>(
-              segments: const [
-                ButtonSegment(
-                  value: AssignmentMode.photo,
-                  label: Text('拍照上传'),
-                ),
-                ButtonSegment(
-                  value: AssignmentMode.quiz,
-                  label: Text('App 内做题'),
-                ),
-              ],
-              selected: {_mode},
-              onSelectionChanged: (selected) {
-                setState(() => _mode = selected.first);
-              },
-            ),
-            const SizedBox(height: 16),
-            const Text('打分方式', style: TextStyle(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 8),
-            SegmentedButton<GradingMode>(
-              segments: const [
-                ButtonSegment(
-                  value: GradingMode.score100,
-                  label: Text('100 分制'),
-                ),
-                ButtonSegment(
-                  value: GradingMode.grade,
-                  label: Text('优良中差'),
-                ),
-              ],
-              selected: {_gradingMode},
-              onSelectionChanged: (selected) {
-                setState(() => _gradingMode = selected.first);
-              },
-            ),
-            if (_mode == AssignmentMode.quiz) ...[
-              const SizedBox(height: 24),
-              // 标题和两个按钮不要挤在同一行：窄屏上会溢出到屏幕外，
-              // 按钮直接看不见、点不着。标题一行，按钮另起一行平分宽度。
-              Text(
-                '题目（${_questions.length} 道）',
-                style: const TextStyle(fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _importing ? null : _importQuestions,
-                      icon: const Icon(Icons.upload_file, size: 18),
-                      label: Text(_importing ? '导入中…' : '导入题目'),
-                    ),
+      // 点页面空白处收起键盘：作业说明是多行输入框，键盘自带的回车只换行、
+      // 没有收起键；点标题/说明以外的空白处就能收。
+      body: GestureDetector(
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              if (widget.classId == null)
+                DropdownButtonFormField<String>(
+                  value: _selectedClassId,
+                  decoration: const InputDecoration(
+                    labelText: '班级',
+                    border: OutlineInputBorder(),
                   ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _addQuestionManually,
-                      icon: const Icon(Icons.add, size: 18),
-                      label: const Text('手动加一题'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              const Text(
-                '导入支持 Excel、Word、PDF 文字版、txt、CSV、JSON；老版 .doc 请另存为 .docx，扫描版 PDF 请转文字版。',
-                style: TextStyle(fontSize: 12, color: Colors.grey),
-              ),
-              if (_questions.any((q) => q.parsePending))
-                Padding(
-                  padding: const EdgeInsets.only(top: 4),
-                  child: Text(
-                    '其中 ${_questions.where((q) => q.parsePending).length} 道切题待确认（评分 4–6 分），请检查题干对不对，不对的删掉；点一道待确认的题能看评分明细。',
-                    style: const TextStyle(fontSize: 12, color: Colors.orange),
-                  ),
-                ),
-              const SizedBox(height: 8),
-              if (_questions.isEmpty)
-                const Card(
-                  child: Padding(
-                    padding: EdgeInsets.all(16),
-                    child: Text('还没有题目，请导入或手动添加。'),
-                  ),
+                  items: [
+                    for (final c in _classes)
+                      DropdownMenuItem(value: c.id, child: Text(c.name)),
+                  ],
+                  onChanged: (value) {
+                    setState(() => _selectedClassId = value);
+                  },
                 )
               else
-                for (var i = 0; i < _questions.length; i++)
-                  Card(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    child: ListTile(
-                      title: Row(
-                        children: [
-                          Text(
-                            '第 ${i + 1} 题（${_questions[i].points} 分）',
-                          ),
-                          if (_questions[i].parsePending) ...[
-                            const SizedBox(width: 6),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 6,
-                                vertical: 2,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.amber.shade100,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: const Text(
-                                '待确认',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.orange,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                      subtitle: Text(
-                        _questions[i].stem,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      onTap: _questions[i].parsePending
-                          ? () => _showParseReasons(_questions[i])
-                          : null,
-                      trailing: IconButton(
-                        icon: const Icon(Icons.delete_outline),
-                        tooltip: '删除这道题',
-                        onPressed: () {
-                          setState(() {
-                            _questions = List.of(_questions)..removeAt(i);
-                          });
-                        },
+                Text('班级：${widget.className ?? ''}',
+                    style: const TextStyle(fontSize: 16)),
+              if (_loadingClasses && widget.classId == null)
+                const Padding(
+                  padding: EdgeInsets.only(top: 12),
+                  child: LoadingView(),
+                ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _titleController,
+                decoration: const InputDecoration(
+                  labelText: '作业标题',
+                  border: OutlineInputBorder(),
+                ),
+                onTapOutside: (_) => FocusScope.of(context).unfocus(),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _descriptionController,
+                decoration: const InputDecoration(
+                  labelText: '作业说明',
+                  border: OutlineInputBorder(),
+                ),
+                maxLines: 4,
+                onTapOutside: (_) => FocusScope.of(context).unfocus(),
+              ),
+              const SizedBox(height: 16),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('截止时间'),
+                subtitle: Text(
+                  _deadline == null
+                      ? '未选择'
+                      : DateFormat('yyyy年MM月dd日 HH:mm').format(_deadline!),
+                ),
+                trailing: FilledButton.tonal(
+                  onPressed: _pickDeadline,
+                  child: const Text('选择时间'),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text('作业模式', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              SegmentedButton<AssignmentMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: AssignmentMode.photo,
+                    label: Text('拍照上传'),
+                  ),
+                  ButtonSegment(
+                    value: AssignmentMode.quiz,
+                    label: Text('App 内做题'),
+                  ),
+                ],
+                selected: {_mode},
+                onSelectionChanged: (selected) {
+                  setState(() => _mode = selected.first);
+                },
+              ),
+              const SizedBox(height: 16),
+              const Text('打分方式', style: TextStyle(fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              SegmentedButton<GradingMode>(
+                segments: const [
+                  ButtonSegment(
+                    value: GradingMode.score100,
+                    label: Text('100 分制'),
+                  ),
+                  ButtonSegment(
+                    value: GradingMode.grade,
+                    label: Text('优良中差'),
+                  ),
+                ],
+                selected: {_gradingMode},
+                onSelectionChanged: (selected) {
+                  setState(() => _gradingMode = selected.first);
+                },
+              ),
+              if (_mode == AssignmentMode.quiz) ...[
+                const SizedBox(height: 24),
+                // 标题和两个按钮不要挤在同一行：窄屏上会溢出到屏幕外，
+                // 按钮直接看不见、点不着。标题一行，按钮另起一行平分宽度。
+                Text(
+                  '题目（${_questions.length} 道）',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _importing ? null : _importQuestions,
+                        icon: const Icon(Icons.upload_file, size: 18),
+                        label: Text(_importing ? '导入中…' : '导入题目'),
                       ),
                     ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _addQuestionManually,
+                        icon: const Icon(Icons.add, size: 18),
+                        label: const Text('手动加一题'),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  '导入支持 Excel、Word、PDF 文字版、txt、CSV、JSON；老版 .doc 请另存为 .docx，扫描版 PDF 请转文字版。',
+                  style: TextStyle(fontSize: 12, color: Colors.grey),
+                ),
+                if (_questions.any((q) => q.parsePending))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      '其中 ${_questions.where((q) => q.parsePending).length} 道切题待确认（评分 4–6 分），请检查题干对不对，不对的删掉；点一道待确认的题能看评分明细。',
+                      style: const TextStyle(fontSize: 12, color: Colors.orange),
+                    ),
                   ),
-            ],
-            const SizedBox(height: 24),
-            FilledButton(
-              onPressed: _publishing ? null : _publish,
-              style: FilledButton.styleFrom(
-                backgroundColor: AppTheme.primary,
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                const SizedBox(height: 8),
+                if (_questions.isEmpty)
+                  const Card(
+                    child: Padding(
+                      padding: EdgeInsets.all(16),
+                      child: Text('还没有题目，请导入或手动添加。'),
+                    ),
+                  )
+                else
+                  for (var i = 0; i < _questions.length; i++)
+                    Card(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        title: Row(
+                          children: [
+                            Text(
+                              '第 ${i + 1} 题（${_questions[i].points} 分）',
+                            ),
+                            if (_questions[i].parsePending) ...[
+                              const SizedBox(width: 6),
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 6,
+                                  vertical: 2,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.amber.shade100,
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: const Text(
+                                  '待确认',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    color: Colors.orange,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                        subtitle: Text(
+                          _questions[i].stem,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        onTap: _questions[i].parsePending
+                            ? () => _showParseReasons(_questions[i])
+                            : null,
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            IconButton(
+                              icon: const Icon(Icons.edit_outlined),
+                              tooltip: '修改这道题',
+                              onPressed: () => _addQuestionManually(
+                                existing: _questions[i],
+                                index: i,
+                              ),
+                            ),
+                            IconButton(
+                              icon: const Icon(Icons.delete_outline),
+                              tooltip: '删除这道题',
+                              onPressed: () {
+                                setState(() {
+                                  _questions =
+                                      List.of(_questions)..removeAt(i);
+                                });
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+              ],
+              const SizedBox(height: 24),
+              FilledButton(
+                onPressed: _publishing ? null : _publish,
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppTheme.primary,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: Text(_publishing ? '发布中…' : '发布作业'),
               ),
-              child: Text(_publishing ? '发布中…' : '发布作业'),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

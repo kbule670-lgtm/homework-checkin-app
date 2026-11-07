@@ -30,7 +30,6 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
   final _service = ClassService();
   List<ClassMember> _members = <ClassMember>[];
   bool _loading = true;
-  bool _deleting = false;
 
   /// 只有建班老师本人才看到解散入口：优先按班级的 teacherId 认，
   /// 拿不到登录用户时退回传进来的 profile 身份。
@@ -60,48 +59,9 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
     }
   }
 
-  Future<void> _confirmDissolve() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) {
-        return AlertDialog(
-          title: const Text('解散班级'),
-          content: Text(
-            '解散“${widget.schoolClass.name}”后，该班的作业、学生提交和批改记录都会删除，不可恢复。确定要解散吗？',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('取消'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              style: FilledButton.styleFrom(backgroundColor: Colors.red),
-              child: const Text('确认解散'),
-            ),
-          ],
-        );
-      },
-    );
-    if (confirmed != true || !mounted) return;
-    setState(() => _deleting = true);
-    try {
-      await _service.deleteClass(widget.schoolClass.id);
-      if (!mounted) return;
-      showAppSnackBar(context, '班级已解散');
-      Navigator.of(context).pop(true);
-    } on StateError catch (e) {
-      if (!mounted) return;
-      setState(() => _deleting = false);
-      showAppSnackBar(context, e.message, isError: true);
-    } catch (_) {
-      if (!mounted) return;
-      setState(() => _deleting = false);
-      showAppSnackBar(context, '解散失败，请稍后重试', isError: true);
-    }
-  }
-
-  Future<void> _confirmRemove(ClassMember member) async {
+  /// 左滑移出学生：滑出红色“移出”，松手先弹确认框，点确认才真的调接口；
+  /// 取消则滑回去，学生不动。
+  Future<bool> _confirmRemove(ClassMember member) async {
     final name = member.studentName ?? '该学生';
     final confirmed = await showDialog<bool>(
       context: context,
@@ -125,7 +85,11 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
         );
       },
     );
-    if (confirmed != true || !mounted) return;
+    return confirmed == true;
+  }
+
+  Future<void> _removeMember(ClassMember member) async {
+    final name = member.studentName ?? '该学生';
     try {
       await _service.removeMember(widget.schoolClass.id, member.studentId);
       if (!mounted) return;
@@ -138,6 +102,21 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
         showAppSnackBar(context, '移出失败，请稍后重试', isError: true);
       }
     }
+  }
+
+  Widget _memberTile(ClassMember member) {
+    return ListTile(
+      leading: NameAvatar(
+        name: member.studentName ?? '学生',
+        size: 40,
+      ),
+      title: Text(member.studentName ?? '学生'),
+      subtitle: Text(
+        '加入时间 ${member.joinedAt.year}-'
+        '${member.joinedAt.month.toString().padLeft(2, '0')}-'
+        '${member.joinedAt.day.toString().padLeft(2, '0')}',
+      ),
+    );
   }
 
   @override
@@ -257,57 +236,47 @@ class _ClassDetailScreenState extends State<ClassDetailScreen> {
                     child: Column(
                       children: <Widget>[
                         for (var i = 0; i < _members.length; i++) ...<Widget>[
-                          ListTile(
-                            leading: NameAvatar(
-                              name: _members[i].studentName ?? '学生',
-                              size: 40,
-                            ),
-                            title: Text(
-                              _members[i].studentName ?? '学生',
-                            ),
-                            subtitle: Text(
-                              '加入时间 ${_members[i].joinedAt.year}-'
-                              '${_members[i].joinedAt.month.toString().padLeft(2, '0')}-'
-                              '${_members[i].joinedAt.day.toString().padLeft(2, '0')}',
-                            ),
-                            trailing: _isOwner
-                                ? TextButton(
-                                    onPressed: () =>
-                                        _confirmRemove(_members[i]),
-                                    style: TextButton.styleFrom(
-                                      foregroundColor: Colors.red,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                      ),
+                          _isOwner
+                              ? Dismissible(
+                                  key: ValueKey(
+                                    'member_${_members[i].studentId}',
+                                  ),
+                                  direction: DismissDirection.endToStart,
+                                  background: Container(
+                                    color: Colors.red,
+                                    alignment: Alignment.centerRight,
+                                    padding: const EdgeInsets.only(right: 20),
+                                    child: const Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '移出',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        SizedBox(width: 6),
+                                        Icon(
+                                          Icons.delete_outline,
+                                          color: Colors.white,
+                                        ),
+                                      ],
                                     ),
-                                    child: const Text('移出'),
-                                  )
-                                : null,
-                          ),
+                                  ),
+                                  confirmDismiss: (_) =>
+                                      _confirmRemove(_members[i]),
+                                  onDismissed: (_) =>
+                                      _removeMember(_members[i]),
+                                  child: _memberTile(_members[i]),
+                                )
+                              : _memberTile(_members[i]),
                           if (i != _members.length - 1)
                             const Divider(height: 1, indent: 68),
                         ],
                       ],
                     ),
                   ),
-                if (_isOwner) ...[
-                  const SizedBox(height: 24),
-                  OutlinedButton(
-                    onPressed: _deleting ? null : _confirmDissolve,
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.red,
-                      side: const BorderSide(color: Colors.red),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: Text(_deleting ? '解散中…' : '解散班级'),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    '解散后该班的作业、提交和批改记录都会删除，不可恢复。',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
               ],
             ),
     );
