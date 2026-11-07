@@ -1,6 +1,6 @@
 plugins {
     id "com.android.application"
-    id "kotlin-android"
+    id "org.jetbrains.kotlin.android"
     id "dev.flutter.flutter-gradle-plugin"
 }
 
@@ -24,17 +24,19 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.homework.checkin"
-    compileSdkVersion 34
+    compileSdkVersion flutter.compileSdkVersion
     ndkVersion flutter.ndkVersion
 
     compileOptions {
         coreLibraryDesugaringEnabled true
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = '1.8'
+    kotlin {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
     }
 
     sourceSets {
@@ -43,9 +45,9 @@ android {
 
     defaultConfig {
         applicationId "com.homework.checkin"
-        // flutter_local_notifications 需要至少 21；拍照、相册权限按系统版本动态申请。
-        minSdkVersion 21
-        targetSdkVersion 34
+        // flutter_local_notifications 需要至少 21；Flutter 3.47 要求 minSdk 至少 23，跟模板默认值 24。
+        minSdkVersion flutter.minSdkVersion
+        targetSdkVersion flutter.targetSdkVersion
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
     }
