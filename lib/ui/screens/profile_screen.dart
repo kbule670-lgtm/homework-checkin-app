@@ -3,6 +3,7 @@ library;
 
 import 'package:flutter/material.dart';
 
+import '../../app_config.dart' as config;
 import '../../models/models.dart';
 import '../../services/supabase_service.dart';
 import '../theme.dart';
@@ -110,7 +111,7 @@ class ProfileScreen extends StatelessWidget {
         const SizedBox(height: 16),
         const Center(
           child: Text(
-            '作业打卡 1.0.4',
+            '作业打卡 ${config.appVersion}',
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
           ),
         ),

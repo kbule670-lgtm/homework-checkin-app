@@ -1,7 +1,7 @@
 name: homework_checkin
 description: "师生作业打卡 App（简易版）：老师布置作业，学生登录提交，老师批改统计。Flutter 一份代码出 iOS + Android，后端用 Supabase 免费版。"
 publish_to: "none"
-version: 1.0.5+6
+version: 1.0.6+7
 
 environment:
   sdk: ^3.9.0

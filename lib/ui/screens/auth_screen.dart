@@ -14,6 +14,17 @@ import '../theme.dart';
 import '../widgets/common.dart';
 import 'home_screen.dart';
 
+/// 原始报错截短到一行能看完的长度（诊断用，登录页直接显示原文才查得动）。
+String _short(String text, [int max = 200]) =>
+    text.length <= max ? text : '${text.substring(0, max)}…';
+
+/// 登录页底部显示的后端地址（只显示域名，不含 Key）。
+String _backendHost() {
+  if (!config.isSupabaseConfigured) return '未配置';
+  final host = Uri.tryParse(config.supabaseUrl)?.host ?? '';
+  return host.isEmpty ? config.supabaseUrl : host;
+}
+
 /// 把 Supabase Auth 的英文报错翻译成人话：密码不对就直说密码不对，
 /// 连不上服务器（安卓手机常见，移动数据到 Supabase 的路不通时）就直说
 /// 是网络问题，别让用户以为是密码错了；其他情况才报登录失败。
@@ -36,7 +47,8 @@ String _authErrorText(AuthException e) {
       message.contains('timed out')) {
     return '连不上服务器，请检查网络后重试（安卓手机可以试试连 WiFi 再登）';
   }
-  return '登录失败，请稍后重试';
+  // 兜底分支：把原始报错原文也显示出来，不然每次都只能猜。
+  return '登录失败，请稍后重试\n原始报错：${_short(message)}';
 }
 
 class AuthScreen extends StatefulWidget {
@@ -121,9 +133,13 @@ class _AuthScreenState extends State<AuthScreen> {
       if (mounted) showAppSnackBar(context, e.message, isError: true);
     } on AuthException catch (e) {
       if (mounted) showAppSnackBar(context, _authErrorText(e), isError: true);
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
-        showAppSnackBar(context, '网络有点问题，请稍后重试', isError: true);
+        showAppSnackBar(
+          context,
+          '网络有点问题，请稍后重试\n原始报错：${_short(e.toString())}',
+          isError: true,
+        );
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -253,6 +269,16 @@ class _AuthScreenState extends State<AuthScreen> {
                 onPressed:
                     _busy ? null : () => setState(() => _isLogin = !_isLogin),
                 child: Text(_isLogin ? '没有账号？去注册' : '已有账号？去登录'),
+              ),
+              const SizedBox(height: 24),
+              Center(
+                child: Text(
+                  '版本 ${config.appVersion} · 后端 ${_backendHost()}',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppTheme.textSecondary,
+                  ),
+                ),
               ),
             ],
           ),
