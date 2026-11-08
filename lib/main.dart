@@ -12,6 +12,7 @@ import 'app_config.dart';
 import 'models/models.dart';
 import 'services/notification_service.dart';
 import 'services/supabase_service.dart';
+import 'ui/motion/meaty_motion.dart';
 import 'ui/screens/auth_screen.dart';
 import 'ui/screens/home_screen.dart';
 import 'ui/theme.dart';
@@ -32,6 +33,8 @@ class MyApp extends StatelessWidget {
       title: appName,
       theme: AppTheme.lightTheme,
       debugShowCheckedModeBanner: false,
+      // 弹簧“肉感”滚动：全平台都按 iOS 那套滚，带惯性、滑到边界回弹。
+      scrollBehavior: const MeatyScrollBehavior(),
       navigatorObservers: <NavigatorObserver>[LiquidGlassNavigatorObserver()],
       home: const AuthGate(),
       routes: <String, WidgetBuilder>{

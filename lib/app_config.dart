@@ -37,7 +37,7 @@ const bool isDemoMode = true;
 const String appName = '作业打卡';
 
 /// 界面里显示的版本号，跟 pubspec.yaml 的 version 保持一致，改版时两处一起改。
-const String appVersion = '1.0.6';
+const String appVersion = '1.0.7';
 
 /// 当前配置是否可用：地址和 Key 都填了才算配好。
 bool get isSupabaseConfigured =>
